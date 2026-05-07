@@ -1608,6 +1608,7 @@ let income={
 };
 let budgetMode='gemeinsam'; // 'gemeinsam' | 'getrennt'
 let bpTab='plan'; // 'plan' | 'ist' | 'verlauf'
+let bpIstMonth=''; // currently selected month for Ist-Eingabe
 
 // ══ CRYPTO ══
 const ENC=new TextEncoder(),DEC=new TextDecoder();
@@ -2152,9 +2153,14 @@ function setEingabeTab(tab){
   currentPositionsTab=tab;
   document.getElementById('eing-tab-konten').classList.toggle('active',tab==='konten');
   document.getElementById('eing-tab-positionen').classList.toggle('active',tab==='positionen');
+  const ausgabenTabBtn=document.getElementById('eing-tab-ausgaben');
+  if(ausgabenTabBtn)ausgabenTabBtn.classList.toggle('active',tab==='ausgaben');
   document.getElementById('eing-konten').style.display=tab==='konten'?'block':'none';
   document.getElementById('eing-positionen').style.display=tab==='positionen'?'block':'none';
+  const ausgabenDiv=document.getElementById('eing-ausgaben');
+  if(ausgabenDiv)ausgabenDiv.style.display=tab==='ausgaben'?'block':'none';
   if(tab==='positionen')renderPositions();
+  if(tab==='ausgaben')renderAusgabenEingabe();
 }
 
 function renderPositions(){
@@ -5917,6 +5923,81 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
 
 // ══ BUDGET IST & ABGLEICH ══
 let bpIstYear=new Date().getFullYear();
+
+function renderAusgabenEingabe(){
+  const body=document.getElementById('ausgaben-eingabe-body');
+  if(!body)return;
+  const cats=getBudgetCats();
+  const now=new Date();
+  if(!bpIstMonth)bpIstMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const act=getActualBudget(bpIstMonth);
+  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
+  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
+
+  let h=`
+  <div style="padding-bottom:8px">
+    <!-- Month picker -->
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+      <div style="font-size:11px;color:var(--tx2);flex-shrink:0;font-weight:500">Monat:</div>
+      <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderAusgabenEingabe()"
+        style="flex:1;max-width:200px;padding:7px 11px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
+    </div>
+    <!-- Quick KPI -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px">
+      <div style="background:var(--bg3);border-radius:9px;padding:10px 13px">
+        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Erfasst</div>
+        <div id="aei-total" class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${istTotal>0?'var(--tx)':'var(--tx3)'}">${istTotal>0?fmt(istTotal):'—'}</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:9px;padding:10px 13px">
+        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Plan</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx2)">${fmt(planTotal)}</div>
+      </div>
+    </div>
+    <!-- Category inputs -->
+    <div style="display:flex;flex-direction:column;gap:0">`;
+
+  cats.forEach((cat,i)=>{
+    const istVal=act[cat.id]||0;
+    const diff=istVal>0?istVal-cat.plan:null;
+    const diffColor=diff===null?'var(--tx3)':diff<=0?'var(--gr)':'var(--rd)';
+    const rowBg=i%2===0?'var(--bg3)':'var(--bg2)';
+    h+=`<div style="display:flex;align-items:center;gap:10px;padding:11px 13px;background:${rowBg};${i===0?'border-radius:10px 10px 0 0':''}${i===cats.length-1?';border-radius:0 0 10px 10px':''}">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--tx);font-weight:500">${escapeHTML(cat.label)}</div>
+        <div style="font-size:9.5px;color:var(--tx3);font-family:var(--fm);margin-top:1px">Plan: ${fmt(cat.plan)}/Mt${diff!==null?` · <span style="color:${diffColor}">${diff>=0?'+':''}${fmt(diff)}</span>`:''}</div>
+      </div>
+      <input type="number" value="${istVal||''}" placeholder="${fmt(cat.plan)}" min="0" step="10"
+        oninput="saveAusgabeEingabe('${cat.id}',this.value,${cat.plan})"
+        style="width:110px;padding:8px 11px;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;color:var(--tx);font-family:var(--fm);font-size:13.5px;text-align:right;flex-shrink:0">
+    </div>`;
+  });
+
+  h+=`</div>
+
+    <div style="margin-top:10px;padding:10px 13px;background:var(--bg3);border-radius:9px;font-size:10.5px;color:var(--tx2);line-height:1.55">
+      💡 Werte werden automatisch gespeichert. Analysiere die Daten dann im <button onclick="goTo('budgetplan');setTimeout(()=>setBpTab('ist'),50)" style="background:none;border:none;color:var(--bl);cursor:pointer;font-size:10.5px;padding:0;font-family:var(--fb);text-decoration:underline">Budgetplan → Ist & Abgleich</button>.
+    </div>
+  </div>`;
+
+  body.innerHTML=h;
+}
+
+function saveAusgabeEingabe(catId, val, plan){
+  if(!actualBudget[bpIstMonth])actualBudget[bpIstMonth]={};
+  const v=parseFloat(val)||0;
+  actualBudget[bpIstMonth][catId]=v;
+
+  // Live update total
+  const cats=getBudgetCats();
+  const act=actualBudget[bpIstMonth];
+  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
+  const totEl=document.getElementById('aei-total');
+  if(totEl){totEl.textContent=istTotal>0?fmt(istTotal):'—';totEl.style.color=istTotal>0?'var(--tx)':'var(--tx3)';}
+
+  // Debounced save
+  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
+  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},800);
+}
 
 function renderBpIst(){
   const body=document.getElementById('budgetplan-body');
