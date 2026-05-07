@@ -5928,6 +5928,31 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
 // ══ BUDGET IST & ABGLEICH ══
 let bpIstYear=new Date().getFullYear();
 
+function getActualBudget(month){
+  return actualBudget[month]||{};
+}
+
+function getBudgetCatPlan(catId){
+  const cat=getBudget().find(c=>c.id===catId);
+  if(!cat)return 0;
+  return cat.items.reduce((s,it)=>s+budgetItemAmt(it),0);
+}
+
+function getBudgetCats(){
+  return getBudget().map(c=>({
+    id:c.id,
+    label:c.label,
+    plan:getBudgetCatPlan(c.id)
+  }));
+}
+
+function saveActualBudget(month, catId, val){
+  if(!actualBudget[month])actualBudget[month]={};
+  actualBudget[month][catId]=parseFloat(val)||0;
+  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
+  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},600);
+}
+
 function renderAusgabenEingabe(){
   const body=document.getElementById('ausgaben-eingabe-body');
   if(!body)return;
