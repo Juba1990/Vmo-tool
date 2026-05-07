@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='25.0.0';
+const APP_VERSION='24.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -520,8 +520,6 @@ textarea::placeholder{color:var(--tx3)}
 
 /* EINGABE TABS */
 .eing-tab-btn{padding:8px 14px;border:none;border-radius:7px;background:transparent;color:var(--tx2);font-size:12px;font-family:var(--fb);font-weight:500;cursor:pointer;transition:all 0.15s;white-space:nowrap}
-.bptab{flex:1;padding:8px 10px;border:none;border-radius:7px;background:transparent;color:var(--tx2);font-size:12px;font-family:var(--fb);font-weight:500;cursor:pointer;transition:all 0.15s;white-space:nowrap;text-align:center}
-.bptab.active{background:var(--bg1);color:var(--tx);box-shadow:0 1px 4px rgba(0,0,0,0.25)}
 .eing-tab-btn:hover{color:var(--tx)}
 .eing-tab-btn.active{background:var(--bg);color:var(--tx);box-shadow:0 1px 3px rgba(0,0,0,0.25)}
 body.light-theme .eing-tab-btn.active{background:var(--bg1);box-shadow:0 1px 3px rgba(0,0,0,0.08)}
@@ -752,12 +750,7 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
   .dash-alloc-body .alloc-row{grid-template-columns:1fr 1fr 95px!important}
   .dash-alloc-body .alloc-row-bar{display:block}
 
-  /* Budget-Tab mobile */
-  .bptab{font-size:11px;padding:7px 6px}
-  /* Ist-KPI grid: 3 auf mobile ok, aber kompakter */
-  #budgetplan-body div[style*="grid-template-columns:1fr 1fr 1fr"]{gap:7px!important}
-  #budgetplan-body div[style*="grid-template-columns:1fr 1fr 1fr"] > div{padding:9px 10px!important}
-  #budgetplan-body div[style*="grid-template-columns:1fr 1fr 1fr"] > div > div:nth-child(2){font-size:13px!important}
+  /* Performance-Widget Mobile: 4 KPIs auf 2x2, Tabelle scrollbar */
   #perf-summary-grid{grid-template-columns:1fr 1fr!important;gap:10px!important}
   #perf-summary-grid > div{min-width:0}
   #perf-summary-grid > div > div:nth-child(2){font-size:14px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1064,16 +1057,6 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
   </div>
 </div></div>
 
-<!-- Debug modal — temporary diagnostic tool -->
-<div class="mbg" id="modal-debug"><div class="modal"><button class="mx" onclick="cm('modal-debug')">✕</button>
-  <div class="mt">🔍 Diagnose</div>
-  <div id="debug-body" style="font-family:var(--fm);font-size:11px;line-height:1.7;word-break:break-all"></div>
-  <div style="margin-top:14px;display:flex;gap:8px">
-    <button class="btn btn-g" onclick="forcePullAndRefresh()" style="flex:1">☁ Neu vom Server laden</button>
-    <button class="btn btn-gh" onclick="cm('modal-debug')">Schliessen</button>
-  </div>
-</div></div>
-
 <!-- Performance detail modal -->
 <div class="mbg" id="modal-perf-detail"><div class="modal modal-wide"><button class="mx" onclick="cm('modal-perf-detail')">✕</button>
   <div class="mt">Performance — Detail</div>
@@ -1167,7 +1150,6 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       </div>
       <button class="foot-btn" onclick="openM('modal-share')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/></svg>Vault teilen</button>
       <button class="foot-btn" onclick="resetSetup()" style="color:var(--tx3);font-size:10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Abmelden</button>
-      <button class="foot-btn" onclick="showDebugInfo()" style="color:var(--am);font-size:10px">🔍 Diagnose</button>
     </div>
   </aside>
 
@@ -1313,12 +1295,6 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
     <div class="page" id="page-budgetplan">
       <div class="ph">
         <div><div class="pt">Budgetplan</div><div class="ps" id="bp-sub">Einkommen &amp; Ausgaben Übersicht</div></div>
-      </div>
-      <!-- Tab bar -->
-      <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
-        <button id="bptab-plan" class="bptab active" onclick="setBpTab('plan')">Plan</button>
-        <button id="bptab-ist" class="bptab" onclick="setBpTab('ist')">Ist &amp; Abgleich</button>
-        <button id="bptab-verlauf" class="bptab" onclick="setBpTab('verlauf')">Verlauf</button>
       </div>
       <div id="budgetplan-body"></div>
     </div>
@@ -1585,7 +1561,6 @@ const BUDGET_DEFAULT=[
 ];
 
 let budget=null; // structure like BUDGET_DEFAULT but with user-entered amounts
-let actualBudget={}; // actualBudget[month][catId] = actual spending CHF
 // When budgetMode='getrennt', each item has {amt_p1, amt_p2} instead of single amt
 // When budgetMode='gemeinsam', each item has single {amt}
 
@@ -1602,7 +1577,6 @@ let income={
   sparrate3a:7258          // annual 3a contribution (0 if none)
 };
 let budgetMode='gemeinsam'; // 'gemeinsam' | 'getrennt'
-let bpTab='plan'; // 'plan' | 'ist' | 'verlauf'
 
 // ══ CRYPTO ══
 const ENC=new TextEncoder(),DEC=new TextDecoder();
@@ -1628,19 +1602,25 @@ const MAX_UNDO=5;
 
 function snapshotState(){
   // Capture current state for undo
-  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget}));
+  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams}));
 }
 
 async function pushAll(){
   ss('busy','Speichert…');
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget};
+    // Save undo snapshot before mutation (only if state already exists)
+    if(window._initialPullDone&&undoStack.length<MAX_UNDO+1){
+      // We snapshot AFTER the mutation, so we capture the new state
+      // The undoStack[length-1] is the previous state
+      // To do undo, we'd revert to undoStack[length-2]
+    }
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams};
+    // Push snapshot AFTER successful save (so we have valid undo points)
     undoStack.push(JSON.parse(JSON.stringify(full)));
     if(undoStack.length>MAX_UNDO+1)undoStack.shift();
     const payload=await encData(cryptoKey,full);
     const rec=await jbRead(binId);
     await jbWrite(binId,{...rec,payload});
-    window._lastPushTime=Date.now();
     ss('ok','Gespeichert ✓');
   }catch(e){
     ss('err',e.message);
@@ -1675,7 +1655,7 @@ async function undoLast(){
   // Skip the snapshot push for the undo itself
   const skipSnapshot=true;
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget};
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams};
     const payload=await encData(cryptoKey,full);
     const rec=await jbRead(binId);
     await jbWrite(binId,{...rec,payload});
@@ -1687,21 +1667,16 @@ async function undoLast(){
   }
 }
 async function pullAll(){
-  // Skip pull if we pushed recently (within 15s) — prevents race condition where
-  // pull overwrites fresh local data with stale server response
-  if(window._lastPushTime&&Date.now()-window._lastPushTime<15000){
-    ss('ok','Sync ✓');
-    window._initialPullDone=true;
-    return true;
-  }
   ss('busy','Sync…');
   try{
     const rec=await jbRead(binId);
     if(rec.payload){
       const full=await decData(cryptoKey,rec.payload);
+      // Detect what changed since last local state
       const changes=detectChanges(full);
       applyFull(full);
       if(changes.length>0&&window._initialPullDone){
+        // Show toast about external changes (only after initial load)
         toast(`📥 Aktualisiert: ${changes.join(', ')}`,'info',4000);
       }
     }
@@ -1773,7 +1748,6 @@ function applyFull(full){
     byCurrency:{chf:30,usd:40,eur:20,other:10}
   };
   projParams=full.projParams||{rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
-  actualBudget=full.actualBudget||{};
   // Reset undo stack on vault switch
   undoStack=[];
 }
@@ -2898,7 +2872,6 @@ async function resetSetup(){
   };
   budgetMode='gemeinsam';
   projParams={rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
-  actualBudget={};
   renteParams={
     ich:{gebJahr:1990,rentenalter:65,lohn:120000,arbJahre:40,pk:150000,pkBeitrag:25000,pkRendite:3,s3:0},
     partner:{gebJahr:1990,rentenalter:64,lohn:80000,arbJahre:38,pk:80000,pkBeitrag:18000,pkRendite:3,s3:0}
@@ -3034,73 +3007,6 @@ function initTheme(){
 }
 
 // ══ APP UPDATE ══
-function showDebugInfo(){
-  const allMonths=Object.keys(db).sort();
-  const validG=validMonths('gesamt');
-  const validP1=validMonths('p1');
-  const validP2=validMonths('p2');
-  const now=new Date();
-  const currentYM=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-
-  let html=`<div style="background:var(--bg3);border-radius:8px;padding:10px;margin-bottom:10px">`;
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>App-Version:</strong> ${APP_VERSION}</div>`;
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>Aktueller Monat:</strong> ${currentYM}</div>`;
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>Alle Monate in DB (${allMonths.length}):</strong><br><span style="color:var(--tx)">${allMonths.join(', ')||'–'}</span></div>`;
-  const hidden=[...hiddenMonths];
-  if(hidden.length>0){
-    html+=`<div style="color:var(--rd);margin-bottom:6px;background:var(--rdbg);border-radius:6px;padding:7px 10px"><strong>⚠ Ausgeblendete Monate (${hidden.length}):</strong><br>${hidden.join(', ')}<br><span style="font-size:10px">Diese Monate erscheinen nicht in der Übersicht!</span><br><button class="btn btn-g btn-sm" style="margin-top:7px" onclick="unHideAllMonths()">Alle wieder einblenden</button></div>`;
-  }else{
-    html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>Ausgeblendete Monate:</strong> <span style="color:var(--gr)">keine</span></div>`;
-  }
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>Gesamt-View zeigt (${validG.length}):</strong><br><span style="color:var(--gr)">${validG.join(', ')||'–'}</span></div>`;
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>${n1()} zeigt (${validP1.length}):</strong><br><span style="color:var(--bl)">${validP1.join(', ')||'–'}</span></div>`;
-  html+=`<div style="color:var(--tx2);margin-bottom:6px"><strong>${n2()} zeigt (${validP2.length}):</strong><br><span style="color:var(--vi)">${validP2.join(', ')||'–'}</span></div>`;
-
-  // Show data per person for latest 3 months
-  const recent=allMonths.slice(-3);
-  html+=`</div><div style="background:var(--bg3);border-radius:8px;padding:10px;margin-bottom:10px">`;
-  html+=`<div style="color:var(--tx);font-weight:500;margin-bottom:8px">Werte letzte ${recent.length} Monate:</div>`;
-  recent.forEach(m=>{
-    const ich=db[m]?.ich||{};
-    const partner=db[m]?.partner||{};
-    const ichTotal=allItemKeys().reduce((s,k)=>s+(ich[k]||0),0);
-    const partnerTotal=allItemKeys().reduce((s,k)=>s+(partner[k]||0),0);
-    const ichEink=ich.einkommen||0;
-    const partnerEink=partner.einkommen||0;
-    const inGesamt=validG.includes(m);
-    html+=`<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--bdr)">
-      <span style="color:${inGesamt?'var(--gr)':'var(--rd)'};font-weight:500">${m} ${inGesamt?'✓ in Gesamt':'✕ NICHT in Gesamt'}</span><br>
-      ${n1()}: Konten ${fmt(ichTotal)} · Einkommen ${fmt(ichEink)}<br>
-      ${n2()}: Konten ${fmt(partnerTotal)} · Einkommen ${fmt(partnerEink)}
-    </div>`;
-  });
-  html+=`</div>`;
-
-  // Sync status
-  html+=`<div style="background:var(--bg3);border-radius:8px;padding:10px">`;
-  html+=`<div style="color:var(--tx);font-weight:500;margin-bottom:6px">Sync-Status:</div>`;
-  html+=`<div style="color:var(--tx2)">VaultId: ${vaultId||'–'}</div>`;
-  html+=`<div style="color:var(--tx2)">Pending Save Timer: ${window._projSaveTimer||window._incomeSaveTimer||window._budgetSaveTimer?'⚠ Ausstehend':'✓ Kein'}</div>`;
-  html+=`</div>`;
-
-  document.getElementById('debug-body').innerHTML=html;
-  openM('modal-debug');
-}
-
-async function forcePullAndRefresh(){
-  cm('modal-debug');
-  toast('Lade vom Server...','info',2000);
-  const ok=await pullAll();
-  if(ok){
-    refreshPage();
-    toast('Geladen und aktualisiert','ok');
-    // Re-open debug to show updated state
-    setTimeout(()=>showDebugInfo(),500);
-  }else{
-    toast('Server-Laden fehlgeschlagen','err');
-  }
-}
-
 function showUpdateBanner(){
   const el=document.getElementById('update-banner');
   if(el)el.style.display='flex';
@@ -4351,25 +4257,7 @@ async function saveGoal(){const name=document.getElementById('goal-name').value.
 async function deleteGoal(id){if(!await confirmX('Ziel löschen?',{title:'Ziel löschen',destructive:true,okLabel:'Löschen'}))return;goals=goals.filter(g=>g.id!==id);await pushAll();renderGoals()}
 
 // ══ HIDDEN MONTHS ══
-async function toggleHideMonth(m){
-  if(hiddenMonths.has(m)){
-    hiddenMonths.delete(m);
-  }else{
-    if(!await confirmX(`${fmtM(m)} aus der Übersicht ausblenden?<br><br>Der Monat bleibt gespeichert, erscheint aber nicht mehr in Verlauf, Übersicht und Konten-Sicht. Du kannst ihn jederzeit wieder einblenden.`,
-      {title:'Monat ausblenden',okLabel:'Ausblenden'}))return;
-    hiddenMonths.add(m);
-  }
-  await pushAll();
-  renderVerlauf();
-}
-
-async function unHideAllMonths(){
-  hiddenMonths.clear();
-  await pushAll();
-  refreshPage();
-  cm('modal-debug');
-  toast('Alle Monate wieder eingeblendet','ok');
-}
+async function toggleHideMonth(m){if(hiddenMonths.has(m))hiddenMonths.delete(m);else hiddenMonths.add(m);await pushAll();renderVerlauf()}
 
 // ══ VERLAUF ══
 function setPer(p,btn){periodFilter=p;document.querySelectorAll('.pb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');document.getElementById('crange').style.display=p==='custom'?'flex':'none';if(p!=='custom')renderVerlauf()}
@@ -4384,17 +4272,7 @@ function renderVerlauf(){
   const mCount=Math.max(1,(ld.getFullYear()-fd.getFullYear())*12+(ld.getMonth()-fd.getMonth()));
   const avg=diff/mCount;
 
-  // Banner für ausgeblendete Monate
-  const hiddenList=[...hiddenMonths].sort();
-  const hiddenBanner=hiddenList.length?`<div style="background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:9px;padding:11px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <div style="flex:1;min-width:0">
-      <div style="font-size:12px;font-weight:500;color:var(--rd)">⚠ ${hiddenList.length} Monat${hiddenList.length===1?'':'e'} ausgeblendet</div>
-      <div style="font-size:10.5px;color:var(--tx2);margin-top:3px">Diese Monate erscheinen nicht in Übersicht & Konten-Sicht: <strong>${hiddenList.map(m=>fmtM(m)).join(', ')}</strong></div>
-    </div>
-    <button class="btn btn-g btn-sm" onclick="unHideAllMonths()" style="flex-shrink:0">Alle einblenden</button>
-  </div>`:'';
-
-  let h=hiddenBanner+`<div class="mr mc4">
+  let h=`<div class="mr mc4">
     <div class="mc hero"><div class="mc-l">Aktuell</div><div class="mc-v blur-val">${fmt(last.t.gesamt)}</div></div>
     <div class="mc"><div class="mc-l">Wachstum</div><div class="mc-v ${diff>=0?'pos':'neg'} blur-val">${diff>=0?'+':''}${fmt(diff)}</div><div class="mc-d ${diff>=0?'pos':'neg'} blur-val">${pct}%</div></div>
     <div class="mc"><div class="mc-l">Ø / Monat</div><div class="mc-v ${avg>=0?'pos':'neg'} blur-val">${avg>=0?'+':''}${fmt(avg)}</div><div class="mc-s mut">über ${mCount} Monate</div></div>
@@ -4408,7 +4286,7 @@ function renderVerlauf(){
   <div class="widget"><div class="widget-hd"><span class="widget-title">Monatstabelle</span></div><div class="widget-body"><div style="overflow-x:auto"><table class="dtbl">
     <thead><tr><th>Monat</th>${vw==='gesamt'?`<th>${n1()}</th><th>${n2()}</th>`:''}<th>Cash</th><th>Anlagen</th><th>Gesamt</th><th>+/−</th><th>Kum.</th><th>Notiz</th><th></th></tr></thead>
     <tbody>${vals.map((v,i)=>{const prev=i>0?vals[i-1].t.gesamt:null;const d=prev!==null?v.t.gesamt-prev:null;const cum=v.t.gesamt-first.t.gesamt;const hid=hiddenMonths.has(months[i]);
-      return`<tr style="${hid?'opacity:0.35;text-decoration:line-through':''}"><td class="tdb">${fmtM(months[i])}</td>${vw==='gesamt'?`<td style="color:#60a5fa" class="blur-val">${fmt(v.ich)}</td><td style="color:#a78bfa" class="blur-val">${fmt(v.partner)}</td>`:''}<td class="blur-val">${fmt(v.t.cash)}</td><td class="blur-val">${fmt(v.t.anlagen)}</td><td class="tdb blur-val">${fmt(v.t.gesamt)}</td><td class="${d===null?'':(d>=0?'pos':'neg')} blur-val">${d===null?'—':(d>=0?'+':'')+fmt(d)}</td><td class="${i===0?'':(cum>=0?'pos':'neg')} blur-val">${i===0?'—':(cum>=0?'+':'')+fmt(cum)}</td><td style="text-align:left;color:var(--tx3);font-size:9px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.note||''}</td><td><button class="del-month-btn" onclick="toggleHideMonth('${months[i]}')" title="${hid?'Einblenden':'Ausblenden'}" style="min-width:28px;min-height:28px;padding:4px 6px">${hid?'👁':'🚫'}</button></td></tr>`;
+      return`<tr style="${hid?'opacity:0.35;text-decoration:line-through':''}"><td class="tdb">${fmtM(months[i])}</td>${vw==='gesamt'?`<td style="color:#60a5fa" class="blur-val">${fmt(v.ich)}</td><td style="color:#a78bfa" class="blur-val">${fmt(v.partner)}</td>`:''}<td class="blur-val">${fmt(v.t.cash)}</td><td class="blur-val">${fmt(v.t.anlagen)}</td><td class="tdb blur-val">${fmt(v.t.gesamt)}</td><td class="${d===null?'':(d>=0?'pos':'neg')} blur-val">${d===null?'—':(d>=0?'+':'')+fmt(d)}</td><td class="${i===0?'':(cum>=0?'pos':'neg')} blur-val">${i===0?'—':(cum>=0?'+':'')+fmt(cum)}</td><td style="text-align:left;color:var(--tx3);font-size:9px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.note||''}</td><td><button class="del-month-btn" onclick="toggleHideMonth('${months[i]}')" title="${hid?'Einblenden':'Ausblenden'}">${hid?'👁':'🚫'}</button></td></tr>`;
     }).join('')}</tbody>
   </table></div></div></div>`;
 
@@ -5190,20 +5068,7 @@ function updIncome(field, val, p){
   window._incomeSaveTimer=setTimeout(async()=>{await pushAll()},800);
 }
 
-function setBpTab(tab){
-  bpTab=tab;
-  document.querySelectorAll('.bptab').forEach(b=>b.classList.remove('active'));
-  document.getElementById('bptab-'+tab)?.classList.add('active');
-  renderBudgetplan();
-}
-
 function renderBudgetplan(){
-  if(bpTab==='ist'){renderBpIst();return}
-  if(bpTab==='verlauf'){renderBpVerlauf();return}
-  renderBpPlan();
-}
-
-function renderBpPlan(){
   const body=document.getElementById('budgetplan-body');
   const hh=calcHousehold();
   const bt=budgetTotals();
@@ -5906,259 +5771,12 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
       <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(251,146,60,0.18)"></span>Defizit</span>
       <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(251,191,36,0.13)"></span>Knapp</span>
       <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(74,222,128,0.13)"></span>OK</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(74,222,128,0.30)"></span>Überschuss &gt; 1800</span>
+      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(74,222,128,0.30)"></span>Überschuss > 1800</span>
     </div>
   </div>`;
 }
 
-// ══ BUDGET IST & ABGLEICH ══
-let bpIstMonth='';  // currently selected month for Ist-Eingabe
-
-function getActualBudget(month){
-  return actualBudget[month]||{};
-}
-
-function getBudgetCatPlan(catId){
-  // Sum all items in this budget category (plan amount)
-  const cat=getBudget().find(c=>c.id===catId);
-  if(!cat)return 0;
-  return cat.items.reduce((s,it)=>s+budgetItemAmt(it),0);
-}
-
-function getBudgetCats(){
-  // All top-level budget categories (for Ist-Erfassung)
-  return getBudget().map(c=>({
-    id:c.id,
-    label:c.label,
-    plan:getBudgetCatPlan(c.id)
-  })).filter(c=>c.plan>0||true);
-}
-
-function saveActualBudget(month, catId, val){
-  if(!actualBudget[month])actualBudget[month]={};
-  actualBudget[month][catId]=parseFloat(val)||0;
-  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
-  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},600);
-}
-
-function renderBpIst(){
-  const body=document.getElementById('budgetplan-body');
-  const cats=getBudgetCats();
-  const now=new Date();
-  // Default to current month
-  if(!bpIstMonth)bpIstMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  const act=getActualBudget(bpIstMonth);
-
-  // Compute totals
-  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
-  const diff=istTotal-planTotal;
-  const diffColor=diff<=0?'var(--gr)':'var(--rd)';
-
-  // Available months with Ist data + current month always available
-  const istMonths=Object.keys(actualBudget).sort();
-  if(!istMonths.includes(bpIstMonth))istMonths.push(bpIstMonth);
-  istMonths.sort();
-
-  let h=`
-  <!-- Month picker -->
-  <div style="display:flex;align-items:center;gap:10px;padding:0 0 16px">
-    <div style="font-size:11px;color:var(--tx2);font-weight:500;flex-shrink:0">Monat:</div>
-    <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderBpIst()" style="flex:1;max-width:180px;padding:7px 10px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
-  </div>
-
-  <!-- Summary KPIs -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px">
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Plan</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx);letter-spacing:-0.3px">${fmt(planTotal)}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Ist</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${istTotal>0?'var(--tx)':'var(--tx3)'};letter-spacing:-0.3px">${istTotal>0?fmt(istTotal):'—'}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Differenz</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${istTotal>0?diffColor:'var(--tx3)'};letter-spacing:-0.3px">${istTotal>0?(diff>=0?'+':'')+fmt(diff):'—'}</div>
-    </div>
-  </div>
-
-  <!-- Per-category rows: Eingabe + Abgleich -->
-  <div style="display:flex;flex-direction:column;gap:10px">`;
-
-  cats.forEach(cat=>{
-    const istVal=act[cat.id]||0;
-    const catDiff=istVal>0?istVal-cat.plan:null;
-    const catDiffColor=catDiff===null?'var(--tx3)':catDiff<=0?'var(--gr)':'var(--rd)';
-    const barPct=cat.plan>0?Math.min(150,istVal/cat.plan*100):0;
-    const barColor=barPct<=100?'var(--gr)':barPct<=120?'var(--am)':'var(--rd)';
-    const yearIst=istVal*12;
-    const yearPlan=cat.plan*12;
-    const yearDiff=yearIst-yearPlan;
-
-    h+=`<div style="background:var(--bg3);border-radius:11px;padding:13px 14px">
-      <!-- Category header -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px">
-        <div style="font-size:12.5px;font-weight:500;color:var(--tx)">${escapeHTML(cat.label)}</div>
-        <div style="font-size:10px;color:var(--tx3);font-family:var(--fm)">Plan: ${fmt(cat.plan)}/Mt</div>
-      </div>
-      <!-- Ist-Eingabe -->
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <div style="font-size:11px;color:var(--tx2);flex:1">Ist diesen Monat</div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input type="number" value="${istVal||''}" placeholder="0" min="0" step="10"
-            oninput="saveActualBudget('${bpIstMonth}','${cat.id}',this.value);updateBpIstRow(this,'${cat.id}',${cat.plan})"
-            style="width:100px;padding:7px 10px;background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;color:var(--tx);font-family:var(--fm);font-size:13px;text-align:right">
-          <span style="font-size:11px;color:var(--tx3)">CHF</span>
-        </div>
-      </div>
-      ${istVal>0?`
-      <!-- Progress bar -->
-      <div style="height:5px;background:var(--bg);border-radius:3px;overflow:hidden;margin-bottom:8px;position:relative">
-        ${cat.plan>0?`<div style="position:absolute;left:${100/1.5}%;top:0;bottom:0;width:1px;background:var(--bdr2)"></div>`:''}
-        <div style="height:100%;width:${Math.min(100,barPct/1.5)}%;background:${barColor};border-radius:3px;transition:width 0.3s"></div>
-      </div>
-      <!-- Abgleich row -->
-      <div style="display:flex;align-items:center;justify-content:space-between;font-size:10.5px;font-family:var(--fm)">
-        <span style="color:${catDiffColor};font-weight:500">${catDiff!==null?(catDiff<=0?'✓ Im Budget':'⚠ Überzogen'):'—'} ${catDiff!==null?(catDiff>=0?'+':'')+fmt(catDiff):''}</span>
-        ${Math.abs(yearDiff)>50?`<span style="color:${yearDiff>0?'var(--rd)':'var(--gr)'};font-size:9.5px">${yearDiff>0?'↑':'↓'} ${fmt(Math.abs(yearDiff))}/Jahr</span>`:''}
-      </div>`:
-      `<div style="font-size:10px;color:var(--tx3);font-style:italic">Noch nicht erfasst für ${fmtM(bpIstMonth)}</div>`}
-    </div>`;
-  });
-
-  h+=`</div>
-
-  <!-- Jahres-Hochrechnung (nur wenn genug Monate) -->
-  ${buildIstJahresHochrechnung()}`;
-
-  body.innerHTML=h;
-}
-
-function updateBpIstRow(input, catId, plan){
-  // Live update of the row without full re-render
-  // We can't easily do this without re-render — just re-render the whole Ist tab
-  // But first save the value
-  if(!actualBudget[bpIstMonth])actualBudget[bpIstMonth]={};
-  actualBudget[bpIstMonth][catId]=parseFloat(input.value)||0;
-  // Re-render after short delay
-  if(window._bpIstRenderTimer)clearTimeout(window._bpIstRenderTimer);
-  window._bpIstRenderTimer=setTimeout(()=>{renderBpIst();},400);
-}
-
-function buildIstJahresHochrechnung(){
-  const months=Object.keys(actualBudget).filter(m=>Object.keys(actualBudget[m]).length>0).sort();
-  if(months.length<2)return '';
-  const cats=getBudgetCats();
-
-  // Average Ist per category over recorded months
-  const avgs=cats.map(cat=>{
-    const vals=months.map(m=>actualBudget[m]?.[cat.id]||0).filter(v=>v>0);
-    const avg=vals.length>0?vals.reduce((s,v)=>s+v,0)/vals.length:0;
-    return {...cat, avgIst:avg, avgPlan:cat.plan};
-  });
-
-  const totalAvgIst=avgs.reduce((s,c)=>s+c.avgIst,0);
-  const totalPlan=avgs.reduce((s,c)=>s+c.avgPlan,0);
-  const yearDiff=(totalAvgIst-totalPlan)*12;
-
-  return `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--bdr)">
-    <div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
-      Jahres-Hochrechnung (${months.length} Monate Basis)
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Ø Ist/Mt</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx)">${fmt(totalAvgIst)}</div>
-      </div>
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Plan/Mt</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx2)">${fmt(totalPlan)}</div>
-      </div>
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Δ /Jahr</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${yearDiff<=0?'var(--gr)':'var(--rd)'}">${yearDiff>=0?'+':''}${fmt(yearDiff)}</div>
-      </div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:6px">
-    ${avgs.filter(c=>c.avgIst>0).map(c=>{
-      const d=c.avgIst-c.avgPlan;
-      const pct=c.avgPlan>0?(c.avgIst/c.avgPlan*100):0;
-      const color=pct<=100?'var(--gr)':pct<=115?'var(--am)':'var(--rd)';
-      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:8px">
-        <div style="flex:1;font-size:11.5px;color:var(--tx)">${escapeHTML(c.label)}</div>
-        <div style="font-family:var(--fm);font-size:11px;color:var(--tx2)">${fmt(c.avgIst)}<span style="color:var(--tx3);font-size:9.5px">/Mt</span></div>
-        <div style="font-family:var(--fm);font-size:11px;color:${color};font-weight:500;min-width:55px;text-align:right">${d>=0?'+':''}${fmt(d)}</div>
-      </div>`;
-    }).join('')}
-    </div>
-    ${Math.abs(yearDiff)>500?`<div style="margin-top:10px;padding:10px 13px;background:${yearDiff>0?'var(--rdbg)':'rgba(74,222,128,0.08)'};border-radius:9px;font-size:11px;line-height:1.55;color:var(--tx2)">
-      ${yearDiff>0
-        ? `⚠ Auf Jahresbasis liegst du ca. <strong style="color:var(--rd)">${fmt(Math.abs(yearDiff))}</strong> über dem Plan. Das entspricht ${fmt(Math.abs(yearDiff/12))}/Mt zu viel.`
-        : `✓ Auf Jahresbasis liegst du ca. <strong style="color:var(--gr)">${fmt(Math.abs(yearDiff))}</strong> unter dem Plan. Gut gemacht!`}
-    </div>`:''}
-  </div>`;
-}
-
-// ══ BUDGET VERLAUF ══
-function renderBpVerlauf(){
-  const body=document.getElementById('budgetplan-body');
-  const months=Object.keys(actualBudget).filter(m=>Object.keys(actualBudget[m]).length>0).sort().slice(-12);
-  const cats=getBudgetCats();
-
-  if(months.length===0){
-    body.innerHTML=`<div class="empty" style="padding:40px 20px;text-align:center">
-      <div style="font-size:32px;margin-bottom:12px">📊</div>
-      <div style="font-size:14px;font-weight:500;color:var(--tx);margin-bottom:8px">Noch keine Ist-Daten</div>
-      <div style="font-size:11.5px;color:var(--tx2);line-height:1.6">Erfasse zuerst Ist-Ausgaben im Tab<br><strong>Ist & Abgleich</strong> für mindestens einen Monat.</div>
-      <button class="btn btn-g" style="margin-top:16px" onclick="setBpTab('ist')">→ Ist erfassen</button>
-    </div>`;
-    return;
-  }
-
-  let h=`<div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:14px">
-    Ist-Ausgaben — letzte ${months.length} Monate
-  </div>`;
-
-  // Per-category trend
-  cats.filter(c=>months.some(m=>actualBudget[m]?.[c.id]>0)).forEach(cat=>{
-    const vals=months.map(m=>({m, ist:actualBudget[m]?.[c.id]||0, plan:cat.plan}));
-    const maxVal=Math.max(cat.plan, ...vals.map(v=>v.ist));
-    const avgIst=vals.filter(v=>v.ist>0).reduce((s,v)=>s+v.ist,0)/Math.max(1,vals.filter(v=>v.ist>0).length);
-    const trend=avgIst-cat.plan;
-
-    h+=`<div style="background:var(--bg3);border-radius:11px;padding:13px 14px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:12px;font-weight:500;color:var(--tx)">${escapeHTML(cat.label)}</div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:10px;color:var(--tx3);font-family:var(--fm)">Ø ${fmt(avgIst)}/Mt</span>
-          <span style="font-size:10px;font-family:var(--fm);color:${trend<=0?'var(--gr)':'var(--rd)'};font-weight:500">${trend>=0?'+':''}${fmt(trend)} vs. Plan</span>
-        </div>
-      </div>
-      <!-- Mini bar chart -->
-      <div style="display:flex;gap:3px;align-items:flex-end;height:44px;margin-bottom:6px">
-        ${vals.map(v=>{
-          const pct=maxVal>0?v.ist/maxVal*100:0;
-          const planPct=maxVal>0?v.plan/maxVal*100:0;
-          const color=v.ist>0?(v.ist<=v.plan?'var(--gr)':v.ist<=v.plan*1.15?'var(--am)':'var(--rd)'):'var(--bg)';
-          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative" title="${fmtM(v.m)}: ${fmt(v.ist)}">
-            <!-- Plan line indicator -->
-            <div style="position:absolute;bottom:${planPct}%;left:0;right:0;height:1px;background:var(--tx3);opacity:0.4"></div>
-            <div style="width:100%;background:${color};border-radius:2px 2px 0 0;height:${Math.max(2,pct)}%;transition:height 0.3s;min-height:${v.ist>0?'4px':'0'}"></div>
-          </div>`;
-        }).join('')}
-      </div>
-      <!-- Month labels -->
-      <div style="display:flex;gap:3px">
-        ${vals.map(v=>`<div style="flex:1;text-align:center;font-size:8px;color:var(--tx3);font-family:var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fmtM(v.m).replace(' ','<br>')}</div>`).join('')}
-      </div>
-    </div>`;
-  });
-
-  body.innerHTML=h;
-}
-
-
+// ── Apply-to-Projection Modal ──
 let applyOption='phase1';
 function openApplyProjection(){
   const hh=calcHousehold();
