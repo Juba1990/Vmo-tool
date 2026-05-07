@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='26.0.0';
+const APP_VERSION='25.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1262,7 +1262,6 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       <div style="display:flex;gap:4px;background:var(--bg3);padding:3px;border-radius:9px;margin:12px 0 14px;width:fit-content">
         <button class="eing-tab-btn active" onclick="setEingabeTab('konten')" id="eing-tab-konten">💼 Konten</button>
         <button class="eing-tab-btn" onclick="setEingabeTab('positionen')" id="eing-tab-positionen">📊 Positionen &amp; Allokation</button>
-        <button class="eing-tab-btn" onclick="setEingabeTab('ausgaben')" id="eing-tab-ausgaben">🧾 Ausgaben</button>
       </div>
 
       <!-- Konten view (existing form) -->
@@ -1287,11 +1286,6 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       <!-- Positionen view (new) -->
       <div id="eing-positionen" style="display:none">
         <div id="positions-body"></div>
-      </div>
-
-      <!-- Ausgaben-Eingabe view -->
-      <div id="eing-ausgaben" style="display:none">
-        <div id="ausgaben-eingabe-body"></div>
       </div>
     </div>
 
@@ -1324,6 +1318,7 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
         <button id="bptab-plan" class="bptab active" onclick="setBpTab('plan')">Plan</button>
         <button id="bptab-ist" class="bptab" onclick="setBpTab('ist')">Ist &amp; Abgleich</button>
+        <button id="bptab-verlauf" class="bptab" onclick="setBpTab('verlauf')">Verlauf</button>
       </div>
       <div id="budgetplan-body"></div>
     </div>
@@ -5204,6 +5199,7 @@ function setBpTab(tab){
 
 function renderBudgetplan(){
   if(bpTab==='ist'){renderBpIst();return}
+  if(bpTab==='verlauf'){renderBpVerlauf();return}
   renderBpPlan();
 }
 
@@ -5916,163 +5912,7 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
 }
 
 // ══ BUDGET IST & ABGLEICH ══
-let bpIstYear=new Date().getFullYear();
-
-function renderBpIst(){
-  const body=document.getElementById('budgetplan-body');
-  const cats=getBudgetCats();
-  const now=new Date();
-  if(!bpIstMonth)bpIstMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  const act=getActualBudget(bpIstMonth);
-  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
-  const diff=istTotal-planTotal;
-  const diffColor=diff<=0?'var(--gr)':'var(--rd)';
-
-  // Build months of selected year
-  const yearMonths=Array.from({length:12},(_,i)=>{
-    const m=i+1;
-    return `${bpIstYear}-${String(m).padStart(2,'0')}`;
-  });
-
-  let h=`
-  <!-- TOP: Monat-Eingabe (compact) -->
-  <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:18px">
-    <div style="font-size:11px;font-weight:500;color:var(--tx);margin-bottom:12px">Ist-Ausgaben erfassen</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <div style="font-size:11px;color:var(--tx2);flex-shrink:0">Monat:</div>
-      <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderBpIst()"
-        style="flex:1;max-width:180px;padding:7px 10px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
-    </div>
-    <!-- KPI row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Plan</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmt(planTotal)}</div>
-      </div>
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Ist</div>
-        <div id="ist-total-ist" class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${istTotal>0?'var(--tx)':'var(--tx3)'}">${istTotal>0?fmt(istTotal):'—'}</div>
-      </div>
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Δ</div>
-        <div id="ist-total-diff" class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${istTotal>0?diffColor:'var(--tx3)'}">${istTotal>0?(diff>=0?'+':'')+fmt(diff):'—'}</div>
-      </div>
-    </div>
-    <!-- Category inputs -->
-    <div style="display:flex;flex-direction:column;gap:8px">
-    ${cats.map(cat=>{
-      const istVal=act[cat.id]||0;
-      const catDiff=istVal>0?istVal-cat.plan:null;
-      const barPct=cat.plan>0?Math.min(150,istVal/cat.plan*100):0;
-      const barColor=barPct<=100?'var(--gr)':barPct<=120?'var(--am)':'var(--rd)';
-      const yearDiff=istVal>0?(istVal-cat.plan)*12:0;
-      return `<div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:11.5px;color:var(--tx);flex:1">${escapeHTML(cat.label)}</span>
-          <span style="font-size:9.5px;color:var(--tx3);font-family:var(--fm)">Plan ${fmt(cat.plan)}</span>
-          <input type="number" value="${istVal||''}" placeholder="0" min="0" step="10"
-            oninput="updateBpIstRow(this,'${cat.id}',${cat.plan})"
-            style="width:90px;padding:5px 8px;background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12.5px;text-align:right">
-        </div>
-        <div style="height:4px;background:var(--bg);border-radius:2px;overflow:hidden;position:relative;margin-bottom:3px">
-          ${cat.plan>0?'<div style="position:absolute;left:66.66%;top:0;bottom:0;width:1px;background:var(--bdr2)"></div>':''}
-          <div id="ist-bar-${cat.id}" style="height:100%;width:${Math.min(100,barPct/1.5)}%;background:${barColor};border-radius:2px;transition:width 0.3s"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;min-height:14px">
-          <span id="ist-diff-${cat.id}" style="font-size:9.5px;font-family:var(--fm);color:${catDiff===null?'':catDiff<=0?'var(--gr)':'var(--rd)'};">${catDiff!==null?(catDiff<=0?'✓ ':' ⚠ ')+(catDiff>=0?'+':'')+fmt(catDiff):''}</span>
-          <span id="ist-yr-${cat.id}" style="font-size:9.5px;font-family:var(--fm);color:${yearDiff>0?'var(--rd)':'var(--gr)'};">${Math.abs(yearDiff)>50&&istVal>0?(yearDiff>0?'↑':'↓')+' '+fmt(Math.abs(yearDiff))+'/J':''}  </span>
-        </div>
-      </div>`;
-    }).join('')}
-    </div>
-  </div>
-
-  <!-- BOTTOM: Jahrestabelle -->
-  <div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:11px;font-weight:500;color:var(--tx);text-transform:uppercase;letter-spacing:0.05em">Jahresübersicht</div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <button onclick="bpIstYear--;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--tx);cursor:pointer;font-size:14px">‹</button>
-        <span style="font-size:12px;font-weight:500;color:var(--tx);min-width:40px;text-align:center">${bpIstYear}</span>
-        <button onclick="bpIstYear++;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--tx);cursor:pointer;font-size:14px">›</button>
-      </div>
-    </div>
-    <!-- Horizontally scrollable table -->
-    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px;border:1px solid var(--bdr)">
-      <table style="border-collapse:collapse;width:100%;min-width:700px;font-size:11px;font-family:var(--fm)">
-        <thead>
-          <tr style="background:var(--bg3)">
-            <th style="text-align:left;padding:9px 12px;color:var(--tx2);font-weight:500;position:sticky;left:0;background:var(--bg3);z-index:2;min-width:100px;font-family:var(--fb)">Kategorie</th>
-            ${yearMonths.map(m=>{
-              const mo=parseInt(m.split('-')[1]);
-              const names=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-              const isCurrent=m===bpIstMonth;
-              return `<th style="text-align:right;padding:9px 8px;color:${isCurrent?'var(--tx)':'var(--tx3)'};font-weight:${isCurrent?'600':'400'};white-space:nowrap;min-width:52px;border-left:1px solid var(--bdr)">${names[mo-1]}</th>`;
-            }).join('')}
-            <th style="text-align:right;padding:9px 10px;color:var(--tx2);font-weight:500;border-left:2px solid var(--bdr2);white-space:nowrap">Ø Ist</th>
-            <th style="text-align:right;padding:9px 10px;color:var(--tx3);font-weight:400;border-left:1px solid var(--bdr);white-space:nowrap">Plan</th>
-            <th style="text-align:right;padding:9px 10px;font-weight:500;border-left:1px solid var(--bdr);white-space:nowrap">Δ/Mt</th>
-            <th style="text-align:right;padding:9px 10px;font-weight:400;border-left:1px solid var(--bdr);white-space:nowrap;color:var(--tx3)">Hochr./J</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${cats.map((cat,ci)=>{
-            const rowBg=ci%2===0?'var(--bg)':'var(--bg3)';
-            const monthVals=yearMonths.map(m=>(actualBudget[m]?.[cat.id])||null);
-            const recorded=monthVals.filter(v=>v!==null);
-            const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
-            const delta=avg!==null?avg-cat.plan:null;
-            const hochr=delta!==null?delta*12:null;
-            const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
-            return `<tr style="background:${rowBg}">
-              <td style="padding:9px 12px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);font-size:11px;border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
-              ${yearMonths.map((m,mi)=>{
-                const v=monthVals[mi];
-                const isCurrent=m===bpIstMonth;
-                const cellColor=v===null?'var(--tx3)':v<=cat.plan?'var(--tx)':'var(--rd)';
-                return `<td style="text-align:right;padding:9px 8px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${isCurrent?'background:rgba(96,165,250,0.08);':''}">
-                  ${v!==null?fmt(v):'<span style="color:var(--bdr2)">—</span>'}
-                </td>`;
-              }).join('')}
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(cat.plan)}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:${deltaColor};font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${hochr!==null?(hochr>=0?'+':'')+fmt(Math.round(hochr)):'—'}</td>
-            </tr>`;
-          }).join('')}
-          <!-- Total row -->
-          ${(()=>{
-            const totals=yearMonths.map(m=>{
-              const row=cats.reduce((s,c)=>{const v=actualBudget[m]?.[c.id];return v!=null?s+v:s},0);
-              return cats.some(c=>actualBudget[m]?.[c.id]!=null)?row:null;
-            });
-            const recorded=totals.filter(v=>v!==null);
-            const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
-            const planT=cats.reduce((s,c)=>s+c.plan,0);
-            const delta=avg!==null?avg-planT:null;
-            const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
-            return `<tr style="background:var(--bg3);font-weight:600;border-top:2px solid var(--bdr2)">
-              <td style="padding:10px 12px;color:var(--tx);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb)">Total</td>
-              ${yearMonths.map((m,mi)=>{
-                const v=totals[mi];
-                const isCurrent=m===bpIstMonth;
-                return `<td style="text-align:right;padding:10px 8px;font-family:var(--fm);color:${v!==null?'var(--tx)':'var(--bdr2)'};border-left:1px solid var(--bdr);${isCurrent?'background:rgba(96,165,250,0.08);':''}" class="blur-val">${v!==null?fmt(v):'—'}</td>`;
-              }).join('')}
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:var(--tx);font-weight:600;border-left:2px solid var(--bdr2)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr)" class="blur-val">${fmt(planT)}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:${deltaColor};font-weight:600;border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmt(Math.round(delta*12)):'—'}</td>
-            </tr>`;
-          })()}
-        </tbody>
-      </table>
-    </div>
-    <div style="font-size:10px;color:var(--tx3);margin-top:8px;font-family:var(--fm)">Aktueller Monat <span style="background:rgba(96,165,250,0.15);border-radius:3px;padding:1px 5px;">blau markiert</span> · Rot = über Plan · Δ/Mt = Ø Ist minus Plan</div>
-  </div>`;
-
-  body.innerHTML=h;
-}
+let bpIstMonth='';  // currently selected month for Ist-Eingabe
 
 function getActualBudget(month){
   return actualBudget[month]||{};
@@ -6101,64 +5941,109 @@ function saveActualBudget(month, catId, val){
   window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},600);
 }
 
+function renderBpIst(){
+  const body=document.getElementById('budgetplan-body');
+  const cats=getBudgetCats();
+  const now=new Date();
+  // Default to current month
+  if(!bpIstMonth)bpIstMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const act=getActualBudget(bpIstMonth);
 
+  // Compute totals
+  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
+  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
+  const diff=istTotal-planTotal;
+  const diffColor=diff<=0?'var(--gr)':'var(--rd)';
+
+  // Available months with Ist data + current month always available
+  const istMonths=Object.keys(actualBudget).sort();
+  if(!istMonths.includes(bpIstMonth))istMonths.push(bpIstMonth);
+  istMonths.sort();
+
+  let h=`
+  <!-- Month picker -->
+  <div style="display:flex;align-items:center;gap:10px;padding:0 0 16px">
+    <div style="font-size:11px;color:var(--tx2);font-weight:500;flex-shrink:0">Monat:</div>
+    <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderBpIst()" style="flex:1;max-width:180px;padding:7px 10px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
+  </div>
+
+  <!-- Summary KPIs -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px">
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Plan</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx);letter-spacing:-0.3px">${fmt(planTotal)}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Ist</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${istTotal>0?'var(--tx)':'var(--tx3)'};letter-spacing:-0.3px">${istTotal>0?fmt(istTotal):'—'}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Differenz</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${istTotal>0?diffColor:'var(--tx3)'};letter-spacing:-0.3px">${istTotal>0?(diff>=0?'+':'')+fmt(diff):'—'}</div>
+    </div>
+  </div>
+
+  <!-- Per-category rows: Eingabe + Abgleich -->
+  <div style="display:flex;flex-direction:column;gap:10px">`;
+
+  cats.forEach(cat=>{
+    const istVal=act[cat.id]||0;
+    const catDiff=istVal>0?istVal-cat.plan:null;
+    const catDiffColor=catDiff===null?'var(--tx3)':catDiff<=0?'var(--gr)':'var(--rd)';
+    const barPct=cat.plan>0?Math.min(150,istVal/cat.plan*100):0;
+    const barColor=barPct<=100?'var(--gr)':barPct<=120?'var(--am)':'var(--rd)';
+    const yearIst=istVal*12;
+    const yearPlan=cat.plan*12;
+    const yearDiff=yearIst-yearPlan;
+
+    h+=`<div style="background:var(--bg3);border-radius:11px;padding:13px 14px">
+      <!-- Category header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px">
+        <div style="font-size:12.5px;font-weight:500;color:var(--tx)">${escapeHTML(cat.label)}</div>
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--fm)">Plan: ${fmt(cat.plan)}/Mt</div>
+      </div>
+      <!-- Ist-Eingabe -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--tx2);flex:1">Ist diesen Monat</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" value="${istVal||''}" placeholder="0" min="0" step="10"
+            oninput="saveActualBudget('${bpIstMonth}','${cat.id}',this.value);updateBpIstRow(this,'${cat.id}',${cat.plan})"
+            style="width:100px;padding:7px 10px;background:var(--bg2);border:1px solid var(--bdr);border-radius:7px;color:var(--tx);font-family:var(--fm);font-size:13px;text-align:right">
+          <span style="font-size:11px;color:var(--tx3)">CHF</span>
+        </div>
+      </div>
+      ${istVal>0?`
+      <!-- Progress bar -->
+      <div style="height:5px;background:var(--bg);border-radius:3px;overflow:hidden;margin-bottom:8px;position:relative">
+        ${cat.plan>0?`<div style="position:absolute;left:${100/1.5}%;top:0;bottom:0;width:1px;background:var(--bdr2)"></div>`:''}
+        <div style="height:100%;width:${Math.min(100,barPct/1.5)}%;background:${barColor};border-radius:3px;transition:width 0.3s"></div>
+      </div>
+      <!-- Abgleich row -->
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:10.5px;font-family:var(--fm)">
+        <span style="color:${catDiffColor};font-weight:500">${catDiff!==null?(catDiff<=0?'✓ Im Budget':'⚠ Überzogen'):'—'} ${catDiff!==null?(catDiff>=0?'+':'')+fmt(catDiff):''}</span>
+        ${Math.abs(yearDiff)>50?`<span style="color:${yearDiff>0?'var(--rd)':'var(--gr)'};font-size:9.5px">${yearDiff>0?'↑':'↓'} ${fmt(Math.abs(yearDiff))}/Jahr</span>`:''}
+      </div>`:
+      `<div style="font-size:10px;color:var(--tx3);font-style:italic">Noch nicht erfasst für ${fmtM(bpIstMonth)}</div>`}
+    </div>`;
+  });
+
+  h+=`</div>
+
+  <!-- Jahres-Hochrechnung (nur wenn genug Monate) -->
+  ${buildIstJahresHochrechnung()}`;
+
+  body.innerHTML=h;
+}
 
 function updateBpIstRow(input, catId, plan){
-  // Save value immediately (no re-render — that would lose focus)
+  // Live update of the row without full re-render
+  // We can't easily do this without re-render — just re-render the whole Ist tab
+  // But first save the value
   if(!actualBudget[bpIstMonth])actualBudget[bpIstMonth]={};
-  const val=parseFloat(input.value)||0;
-  actualBudget[bpIstMonth][catId]=val;
-
-  // Live-update only the affected row's visual elements (no re-render)
-  const diff=val-plan;
-  const pct=plan>0?val/plan*100:0;
-  const barColor=pct<=100?'var(--gr)':pct<=120?'var(--am)':'var(--rd)';
-  const yearDiff=diff*12;
-
-  // Update progress bar
-  const barEl=document.getElementById('ist-bar-'+catId);
-  if(barEl)barEl.style.width=Math.min(100,pct/1.5)+'%', barEl.style.background=barColor;
-
-  // Update diff label
-  const diffEl=document.getElementById('ist-diff-'+catId);
-  if(diffEl){
-    if(val>0){
-      diffEl.style.color=diff<=0?'var(--gr)':'var(--rd)';
-      diffEl.textContent=(diff<=0?'✓ Im Budget ':'⚠ Überzogen ')+(diff>=0?'+':'')+fmt(diff);
-    }else{
-      diffEl.textContent='';
-    }
-  }
-
-  // Update year impact
-  const yrEl=document.getElementById('ist-yr-'+catId);
-  if(yrEl){
-    if(Math.abs(yearDiff)>50&&val>0){
-      yrEl.style.color=yearDiff>0?'var(--rd)':'var(--gr)';
-      yrEl.textContent=(yearDiff>0?'↑ ':'↓ ')+fmt(Math.abs(yearDiff))+'/Jahr';
-    }else{
-      yrEl.textContent='';
-    }
-  }
-
-  // Update summary KPIs
-  const cats=getBudgetCats();
-  const act=actualBudget[bpIstMonth]||{};
-  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
-  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const totalDiff=istTotal-planTotal;
-
-  const istEl=document.getElementById('ist-total-ist');
-  const diffTotalEl=document.getElementById('ist-total-diff');
-  if(istEl)istEl.textContent=istTotal>0?fmt(istTotal):'—';
-  if(diffTotalEl){
-    diffTotalEl.textContent=istTotal>0?(totalDiff>=0?'+':'')+fmt(totalDiff):'—';
-    diffTotalEl.style.color=istTotal>0?(totalDiff<=0?'var(--gr)':'var(--rd)'):'var(--tx3)';
-  }
-
-  // Debounced save only (no re-render)
-  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
-  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},800);
+  actualBudget[bpIstMonth][catId]=parseFloat(input.value)||0;
+  // Re-render after short delay
+  if(window._bpIstRenderTimer)clearTimeout(window._bpIstRenderTimer);
+  window._bpIstRenderTimer=setTimeout(()=>{renderBpIst();},400);
 }
 
 function buildIstJahresHochrechnung(){
