@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='26.0.0';
+const APP_VERSION='27.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -2160,7 +2160,11 @@ function setEingabeTab(tab){
   const ausgabenDiv=document.getElementById('eing-ausgaben');
   if(ausgabenDiv)ausgabenDiv.style.display=tab==='ausgaben'?'block':'none';
   if(tab==='positionen')renderPositions();
-  if(tab==='ausgaben')renderAusgabenEingabe();
+  if(tab==='ausgaben'){
+    // Sync with currently selected entry month
+    if(currentEntryMonth)bpIstMonth=currentEntryMonth;
+    renderAusgabenEingabe();
+  }
 }
 
 function renderPositions(){
@@ -3653,8 +3657,8 @@ function renderEingabeNav(){
   if(delBtn)delBtn.style.display=curM&&db[curM]?'inline-flex':'none';
 }
 
-function onMonthChange(m){currentEntryMonth=m;renderEingabeNav();renderForm()}
-function selectMonth(m){currentEntryMonth=m;renderEingabeNav();renderForm()}
+function onMonthChange(m){currentEntryMonth=m;bpIstMonth=m;renderEingabeNav();renderForm()}
+function selectMonth(m){currentEntryMonth=m;bpIstMonth=m;renderEingabeNav();renderForm()}
 async function deleteMonthFromList(m){
   if(!confirm(`Monat ${fmtM(m)} komplett löschen (beide Personen)?`))return;
   delete db[m];delete notes[m];
@@ -5941,6 +5945,7 @@ function renderAusgabenEingabe(){
       <div style="font-size:11px;color:var(--tx2);flex-shrink:0;font-weight:500">Monat:</div>
       <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderAusgabenEingabe()"
         style="flex:1;max-width:200px;padding:7px 11px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
+        style="flex:1;max-width:200px;padding:7px 11px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
     </div>
     <!-- Quick KPI -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px">
@@ -5985,11 +5990,19 @@ function renderAusgabenEingabe(){
 function saveAusgabeEingabe(catId, val, plan){
   if(!actualBudget[bpIstMonth])actualBudget[bpIstMonth]={};
   const v=parseFloat(val)||0;
-  actualBudget[bpIstMonth][catId]=v;
+  if(v===0){
+    delete actualBudget[bpIstMonth][catId];
+  }else{
+    actualBudget[bpIstMonth][catId]=v;
+  }
+  // If all categories are now empty, remove the month entirely
+  if(Object.keys(actualBudget[bpIstMonth]).length===0){
+    delete actualBudget[bpIstMonth];
+  }
 
   // Live update total
   const cats=getBudgetCats();
-  const act=actualBudget[bpIstMonth];
+  const act=actualBudget[bpIstMonth]||{};
   const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
   const totEl=document.getElementById('aei-total');
   if(totEl){totEl.textContent=istTotal>0?fmt(istTotal):'—';totEl.style.color=istTotal>0?'var(--tx)':'var(--tx3)';}
@@ -6001,245 +6014,124 @@ function saveAusgabeEingabe(catId, val, plan){
 
 function renderBpIst(){
   const body=document.getElementById('budgetplan-body');
+  if(!body)return;
   const cats=getBudgetCats();
   const now=new Date();
-  if(!bpIstMonth)bpIstMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  const act=getActualBudget(bpIstMonth);
-  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
-  const diff=istTotal-planTotal;
-  const diffColor=diff<=0?'var(--gr)':'var(--rd)';
+  if(!bpIstMonth)bpIstMonth=currentEntryMonth||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
 
   // Build months of selected year
-  const yearMonths=Array.from({length:12},(_,i)=>{
-    const m=i+1;
-    return `${bpIstYear}-${String(m).padStart(2,'0')}`;
-  });
+  const yearMonths=Array.from({length:12},(_,i)=>`${bpIstYear}-${String(i+1).padStart(2,'0')}`);
+  const monthNames=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+
+  // Year-level totals for summary KPIs
+  const recordedMonths=yearMonths.filter(m=>actualBudget[m]&&Object.keys(actualBudget[m]).length>0);
+  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
+  const avgIstTotal=recordedMonths.length>0
+    ?recordedMonths.reduce((s,m)=>s+cats.reduce((cs,c)=>cs+(actualBudget[m]?.[c.id]||0),0),0)/recordedMonths.length
+    :null;
+  const deltaTotal=avgIstTotal!==null?avgIstTotal-planTotal:null;
 
   let h=`
-  <!-- TOP: Monat-Eingabe (compact) -->
-  <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:18px">
-    <div style="font-size:11px;font-weight:500;color:var(--tx);margin-bottom:12px">Ist-Ausgaben erfassen</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <div style="font-size:11px;color:var(--tx2);flex-shrink:0">Monat:</div>
-      <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderBpIst()"
-        style="flex:1;max-width:180px;padding:7px 10px;background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
+  <!-- Year selector + summary -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button onclick="bpIstYear--;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 13px;color:var(--tx);cursor:pointer;font-size:16px;line-height:1">‹</button>
+      <span style="font-size:15px;font-weight:600;color:var(--tx);min-width:44px;text-align:center">${bpIstYear}</span>
+      <button onclick="bpIstYear++;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 13px;color:var(--tx);cursor:pointer;font-size:16px;line-height:1">›</button>
     </div>
-    <!-- KPI row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Plan</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmt(planTotal)}</div>
-      </div>
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Ist</div>
-        <div id="ist-total-ist" class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${istTotal>0?'var(--tx)':'var(--tx3)'}">${istTotal>0?fmt(istTotal):'—'}</div>
-      </div>
-      <div style="background:var(--bg);border-radius:8px;padding:9px 11px">
-        <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Δ</div>
-        <div id="ist-total-diff" class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${istTotal>0?diffColor:'var(--tx3)'}">${istTotal>0?(diff>=0?'+':'')+fmt(diff):'—'}</div>
-      </div>
-    </div>
-    <!-- Category inputs -->
-    <div style="display:flex;flex-direction:column;gap:8px">
-    ${cats.map(cat=>{
-      const istVal=act[cat.id]||0;
-      const catDiff=istVal>0?istVal-cat.plan:null;
-      const barPct=cat.plan>0?Math.min(150,istVal/cat.plan*100):0;
-      const barColor=barPct<=100?'var(--gr)':barPct<=120?'var(--am)':'var(--rd)';
-      const yearDiff=istVal>0?(istVal-cat.plan)*12:0;
-      return `<div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:11.5px;color:var(--tx);flex:1">${escapeHTML(cat.label)}</span>
-          <span style="font-size:9.5px;color:var(--tx3);font-family:var(--fm)">Plan ${fmt(cat.plan)}</span>
-          <input type="number" value="${istVal||''}" placeholder="0" min="0" step="10"
-            oninput="updateBpIstRow(this,'${cat.id}',${cat.plan})"
-            style="width:90px;padding:5px 8px;background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12.5px;text-align:right">
-        </div>
-        <div style="height:4px;background:var(--bg);border-radius:2px;overflow:hidden;position:relative;margin-bottom:3px">
-          ${cat.plan>0?'<div style="position:absolute;left:66.66%;top:0;bottom:0;width:1px;background:var(--bdr2)"></div>':''}
-          <div id="ist-bar-${cat.id}" style="height:100%;width:${Math.min(100,barPct/1.5)}%;background:${barColor};border-radius:2px;transition:width 0.3s"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;min-height:14px">
-          <span id="ist-diff-${cat.id}" style="font-size:9.5px;font-family:var(--fm);color:${catDiff===null?'':catDiff<=0?'var(--gr)':'var(--rd)'};">${catDiff!==null?(catDiff<=0?'✓ ':' ⚠ ')+(catDiff>=0?'+':'')+fmt(catDiff):''}</span>
-          <span id="ist-yr-${cat.id}" style="font-size:9.5px;font-family:var(--fm);color:${yearDiff>0?'var(--rd)':'var(--gr)'};">${Math.abs(yearDiff)>50&&istVal>0?(yearDiff>0?'↑':'↓')+' '+fmt(Math.abs(yearDiff))+'/J':''}  </span>
-        </div>
-      </div>`;
-    }).join('')}
-    </div>
+    ${avgIstTotal!==null?`<div style="display:flex;gap:14px;font-family:var(--fm);font-size:11.5px">
+      <span style="color:var(--tx2)">Ø Ist <strong class="blur-val" style="color:var(--tx)">${fmt(Math.round(avgIstTotal))}</strong></span>
+      <span style="color:var(--tx2)">Plan <strong class="blur-val" style="color:var(--tx2)">${fmt(planTotal)}</strong></span>
+      <span style="color:${deltaTotal<=0?'var(--gr)':'var(--rd)'}"><strong>${deltaTotal>=0?'+':''}${fmt(Math.round(deltaTotal))}/Mt</strong></span>
+    </div>`:`<div style="font-size:11px;color:var(--tx3)">Noch keine Daten für ${bpIstYear}</div>`}
   </div>
 
-  <!-- BOTTOM: Jahrestabelle -->
-  <div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:11px;font-weight:500;color:var(--tx);text-transform:uppercase;letter-spacing:0.05em">Jahresübersicht</div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <button onclick="bpIstYear--;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--tx);cursor:pointer;font-size:14px">‹</button>
-        <span style="font-size:12px;font-weight:500;color:var(--tx);min-width:40px;text-align:center">${bpIstYear}</span>
-        <button onclick="bpIstYear++;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--tx);cursor:pointer;font-size:14px">›</button>
-      </div>
-    </div>
-    <!-- Horizontally scrollable table -->
-    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px;border:1px solid var(--bdr)">
-      <table style="border-collapse:collapse;width:100%;min-width:700px;font-size:11px;font-family:var(--fm)">
-        <thead>
-          <tr style="background:var(--bg3)">
-            <th style="text-align:left;padding:9px 12px;color:var(--tx2);font-weight:500;position:sticky;left:0;background:var(--bg3);z-index:2;min-width:100px;font-family:var(--fb)">Kategorie</th>
-            ${yearMonths.map(m=>{
-              const mo=parseInt(m.split('-')[1]);
-              const names=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-              const isCurrent=m===bpIstMonth;
-              return `<th style="text-align:right;padding:9px 8px;color:${isCurrent?'var(--tx)':'var(--tx3)'};font-weight:${isCurrent?'600':'400'};white-space:nowrap;min-width:52px;border-left:1px solid var(--bdr)">${names[mo-1]}</th>`;
-            }).join('')}
-            <th style="text-align:right;padding:9px 10px;color:var(--tx2);font-weight:500;border-left:2px solid var(--bdr2);white-space:nowrap">Ø Ist</th>
-            <th style="text-align:right;padding:9px 10px;color:var(--tx3);font-weight:400;border-left:1px solid var(--bdr);white-space:nowrap">Plan</th>
-            <th style="text-align:right;padding:9px 10px;font-weight:500;border-left:1px solid var(--bdr);white-space:nowrap">Δ/Mt</th>
-            <th style="text-align:right;padding:9px 10px;font-weight:400;border-left:1px solid var(--bdr);white-space:nowrap;color:var(--tx3)">Hochr./J</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${cats.map((cat,ci)=>{
-            const rowBg=ci%2===0?'var(--bg)':'var(--bg3)';
-            const monthVals=yearMonths.map(m=>(actualBudget[m]?.[cat.id])||null);
-            const recorded=monthVals.filter(v=>v!==null);
-            const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
-            const delta=avg!==null?avg-cat.plan:null;
-            const hochr=delta!==null?delta*12:null;
-            const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
-            return `<tr style="background:${rowBg}">
-              <td style="padding:9px 12px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);font-size:11px;border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
-              ${yearMonths.map((m,mi)=>{
-                const v=monthVals[mi];
-                const isCurrent=m===bpIstMonth;
-                const cellColor=v===null?'var(--tx3)':v<=cat.plan?'var(--tx)':'var(--rd)';
-                return `<td style="text-align:right;padding:9px 8px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${isCurrent?'background:rgba(96,165,250,0.08);':''}">
-                  ${v!==null?fmt(v):'<span style="color:var(--bdr2)">—</span>'}
-                </td>`;
-              }).join('')}
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(cat.plan)}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:${deltaColor};font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
-              <td style="text-align:right;padding:9px 10px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${hochr!==null?(hochr>=0?'+':'')+fmt(Math.round(hochr)):'—'}</td>
-            </tr>`;
+  <!-- Hint about entry -->
+  <div style="background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.18);border-radius:9px;padding:9px 13px;margin-bottom:14px;font-size:10.5px;color:var(--tx2);display:flex;align-items:center;gap:8px">
+    <span>💡</span>
+    <span>Ausgaben erfassen: <button onclick="goTo('eingabe');setTimeout(()=>setEingabeTab('ausgaben'),80)" style="background:none;border:none;color:var(--bl);cursor:pointer;font-size:10.5px;padding:0;font-family:var(--fb);text-decoration:underline">Eingabe → 🧾 Ausgaben</button></span>
+  </div>
+
+  <!-- Table -->
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr)">
+    <table style="border-collapse:collapse;width:100%;min-width:680px;font-size:11px">
+      <thead>
+        <tr style="background:var(--bg3)">
+          <th style="text-align:left;padding:10px 13px;color:var(--tx2);font-weight:500;position:sticky;left:0;background:var(--bg3);z-index:2;min-width:95px;font-family:var(--fb);border-bottom:1px solid var(--bdr2)">Kategorie</th>
+          ${yearMonths.map((m,i)=>{
+            const isCur=m===bpIstMonth;
+            const hasData=actualBudget[m]&&Object.keys(actualBudget[m]).length>0;
+            return `<th style="text-align:right;padding:10px 6px;font-weight:${isCur?'600':'400'};color:${isCur?'var(--tx)':hasData?'var(--tx2)':'var(--tx3)'};white-space:nowrap;min-width:44px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);font-family:var(--fb)">${monthNames[i]}</th>`;
           }).join('')}
-          <!-- Total row -->
-          ${(()=>{
-            const totals=yearMonths.map(m=>{
-              const row=cats.reduce((s,c)=>{const v=actualBudget[m]?.[c.id];return v!=null?s+v:s},0);
-              return cats.some(c=>actualBudget[m]?.[c.id]!=null)?row:null;
-            });
-            const recorded=totals.filter(v=>v!==null);
-            const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
-            const planT=cats.reduce((s,c)=>s+c.plan,0);
-            const delta=avg!==null?avg-planT:null;
-            const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
-            return `<tr style="background:var(--bg3);font-weight:600;border-top:2px solid var(--bdr2)">
-              <td style="padding:10px 12px;color:var(--tx);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb)">Total</td>
-              ${yearMonths.map((m,mi)=>{
-                const v=totals[mi];
-                const isCurrent=m===bpIstMonth;
-                return `<td style="text-align:right;padding:10px 8px;font-family:var(--fm);color:${v!==null?'var(--tx)':'var(--bdr2)'};border-left:1px solid var(--bdr);${isCurrent?'background:rgba(96,165,250,0.08);':''}" class="blur-val">${v!==null?fmt(v):'—'}</td>`;
-              }).join('')}
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:var(--tx);font-weight:600;border-left:2px solid var(--bdr2)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr)" class="blur-val">${fmt(planT)}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:${deltaColor};font-weight:600;border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
-              <td style="text-align:right;padding:10px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmt(Math.round(delta*12)):'—'}</td>
-            </tr>`;
-          })()}
-        </tbody>
-      </table>
-    </div>
-    <div style="font-size:10px;color:var(--tx3);margin-top:8px;font-family:var(--fm)">Aktueller Monat <span style="background:rgba(96,165,250,0.15);border-radius:3px;padding:1px 5px;">blau markiert</span> · Rot = über Plan · Δ/Mt = Ø Ist minus Plan</div>
+          <th style="text-align:right;padding:10px 9px;color:var(--tx);font-weight:600;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Ø Ist</th>
+          <th style="text-align:right;padding:10px 9px;color:var(--tx3);font-weight:400;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Plan</th>
+          <th style="text-align:right;padding:10px 9px;font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Δ/Mt</th>
+          <th style="text-align:right;padding:10px 9px;font-weight:400;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3);color:var(--tx3)">Hoch./J</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${cats.map((cat,ci)=>{
+          const monthVals=yearMonths.map(m=>{
+            const v=actualBudget[m]?.[cat.id];
+            return (v!==undefined)?v:null;
+          });
+          const recorded=monthVals.filter(v=>v!==null&&v>0);
+          const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
+          const delta=avg!==null?avg-cat.plan:null;
+          const hochr=delta!==null?delta*12:null;
+          const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
+          const rowBg=ci%2===0?'var(--bg)':'var(--bg3)';
+          return `<tr style="background:${rowBg}">
+            <td style="padding:9px 13px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
+            ${yearMonths.map((m,mi)=>{
+              const v=monthVals[mi];
+              const isCur=m===bpIstMonth;
+              const overPlan=v!==null&&v>cat.plan;
+              const cellBg=isCur?'rgba(96,165,250,0.07)':'';
+              const cellColor=v===null?'':overPlan?'var(--rd)':v>0?'var(--tx)':'var(--tx3)';
+              return `<td style="text-align:right;padding:9px 6px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${cellBg?'background:'+cellBg+';':''}">${v!==null&&v>0?fmt(v):'<span style="color:var(--bdr2)">—</span>'}</td>`;
+            }).join('')}
+            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
+            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(cat.plan)}</td>
+            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:${deltaColor};font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
+            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${hochr!==null?(hochr>=0?'+':'')+fmt(Math.round(hochr)):'—'}</td>
+          </tr>`;
+        }).join('')}
+        <!-- Total row -->
+        ${(()=>{
+          const totals=yearMonths.map((m,mi)=>{
+            const hasAny=cats.some(c=>actualBudget[m]?.[c.id]>0);
+            if(!hasAny)return null;
+            return cats.reduce((s,c)=>s+(actualBudget[m]?.[c.id]||0),0);
+          });
+          const recTotals=totals.filter(v=>v!==null&&v>0);
+          const avg=recTotals.length>0?recTotals.reduce((s,v)=>s+v,0)/recTotals.length:null;
+          const planT=cats.reduce((s,c)=>s+c.plan,0);
+          const delta=avg!==null?avg-planT:null;
+          const dc=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
+          return `<tr style="background:var(--bg3);border-top:2px solid var(--bdr2)">
+            <td style="padding:10px 13px;color:var(--tx);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600">Total</td>
+            ${yearMonths.map((m,mi)=>{
+              const v=totals[mi];
+              const isCur=m===bpIstMonth;
+              return `<td style="text-align:right;padding:10px 6px;font-family:var(--fm);font-weight:500;color:${v!==null?'var(--tx)':'var(--bdr2)'};border-left:1px solid var(--bdr);${isCur?'background:rgba(96,165,250,0.07);':''}" class="blur-val">${v!==null?fmt(v):'—'}</td>`;
+            }).join('')}
+            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);font-weight:600;color:var(--tx);border-left:2px solid var(--bdr2)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
+            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr)" class="blur-val">${fmt(planT)}</td>
+            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);font-weight:600;color:${dc};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmt(Math.round(delta)):'—'}</td>
+            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);color:${dc};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmt(Math.round(delta*12)):'—'}</td>
+          </tr>`;
+        })()}
+      </tbody>
+    </table>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:10px;color:var(--tx3);font-family:var(--fm)">
+    <span>Aktueller Monat <span style="background:rgba(96,165,250,0.15);border-radius:3px;padding:1px 5px">blau</span></span>
+    <span style="color:var(--rd)">Rot = über Plan</span>
+    <span>Ø aus erfassten Monaten · Hochr. = Δ × 12</span>
   </div>`;
 
   body.innerHTML=h;
-}
-
-function getActualBudget(month){
-  return actualBudget[month]||{};
-}
-
-function getBudgetCatPlan(catId){
-  // Sum all items in this budget category (plan amount)
-  const cat=getBudget().find(c=>c.id===catId);
-  if(!cat)return 0;
-  return cat.items.reduce((s,it)=>s+budgetItemAmt(it),0);
-}
-
-function getBudgetCats(){
-  // All top-level budget categories (for Ist-Erfassung)
-  return getBudget().map(c=>({
-    id:c.id,
-    label:c.label,
-    plan:getBudgetCatPlan(c.id)
-  })).filter(c=>c.plan>0||true);
-}
-
-function saveActualBudget(month, catId, val){
-  if(!actualBudget[month])actualBudget[month]={};
-  actualBudget[month][catId]=parseFloat(val)||0;
-  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
-  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},600);
-}
-
-
-
-function updateBpIstRow(input, catId, plan){
-  // Save value immediately (no re-render — that would lose focus)
-  if(!actualBudget[bpIstMonth])actualBudget[bpIstMonth]={};
-  const val=parseFloat(input.value)||0;
-  actualBudget[bpIstMonth][catId]=val;
-
-  // Live-update only the affected row's visual elements (no re-render)
-  const diff=val-plan;
-  const pct=plan>0?val/plan*100:0;
-  const barColor=pct<=100?'var(--gr)':pct<=120?'var(--am)':'var(--rd)';
-  const yearDiff=diff*12;
-
-  // Update progress bar
-  const barEl=document.getElementById('ist-bar-'+catId);
-  if(barEl)barEl.style.width=Math.min(100,pct/1.5)+'%', barEl.style.background=barColor;
-
-  // Update diff label
-  const diffEl=document.getElementById('ist-diff-'+catId);
-  if(diffEl){
-    if(val>0){
-      diffEl.style.color=diff<=0?'var(--gr)':'var(--rd)';
-      diffEl.textContent=(diff<=0?'✓ Im Budget ':'⚠ Überzogen ')+(diff>=0?'+':'')+fmt(diff);
-    }else{
-      diffEl.textContent='';
-    }
-  }
-
-  // Update year impact
-  const yrEl=document.getElementById('ist-yr-'+catId);
-  if(yrEl){
-    if(Math.abs(yearDiff)>50&&val>0){
-      yrEl.style.color=yearDiff>0?'var(--rd)':'var(--gr)';
-      yrEl.textContent=(yearDiff>0?'↑ ':'↓ ')+fmt(Math.abs(yearDiff))+'/Jahr';
-    }else{
-      yrEl.textContent='';
-    }
-  }
-
-  // Update summary KPIs
-  const cats=getBudgetCats();
-  const act=actualBudget[bpIstMonth]||{};
-  const istTotal=cats.reduce((s,c)=>s+(act[c.id]||0),0);
-  const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const totalDiff=istTotal-planTotal;
-
-  const istEl=document.getElementById('ist-total-ist');
-  const diffTotalEl=document.getElementById('ist-total-diff');
-  if(istEl)istEl.textContent=istTotal>0?fmt(istTotal):'—';
-  if(diffTotalEl){
-    diffTotalEl.textContent=istTotal>0?(totalDiff>=0?'+':'')+fmt(totalDiff):'—';
-    diffTotalEl.style.color=istTotal>0?(totalDiff<=0?'var(--gr)':'var(--rd)'):'var(--tx3)';
-  }
-
-  // Debounced save only (no re-render)
-  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
-  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},800);
 }
 
 function buildIstJahresHochrechnung(){
