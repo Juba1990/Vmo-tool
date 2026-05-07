@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='27.0.0';
+const APP_VERSION='28.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1591,6 +1591,7 @@ const BUDGET_DEFAULT=[
 
 let budget=null; // structure like BUDGET_DEFAULT but with user-entered amounts
 let actualBudget={}; // actualBudget[month][catId] = actual spending CHF
+let actualBudgetNotes={}; // actualBudgetNotes[month][catId] = comment string
 // When budgetMode='getrennt', each item has {amt_p1, amt_p2} instead of single amt
 // When budgetMode='gemeinsam', each item has single {amt}
 
@@ -1634,13 +1635,13 @@ const MAX_UNDO=5;
 
 function snapshotState(){
   // Capture current state for undo
-  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget}));
+  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes}));
 }
 
 async function pushAll(){
   ss('busy','Speichert…');
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget};
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
     undoStack.push(JSON.parse(JSON.stringify(full)));
     if(undoStack.length>MAX_UNDO+1)undoStack.shift();
     const payload=await encData(cryptoKey,full);
@@ -1681,7 +1682,7 @@ async function undoLast(){
   // Skip the snapshot push for the undo itself
   const skipSnapshot=true;
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget};
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
     const payload=await encData(cryptoKey,full);
     const rec=await jbRead(binId);
     await jbWrite(binId,{...rec,payload});
@@ -1780,6 +1781,7 @@ function applyFull(full){
   };
   projParams=full.projParams||{rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
   actualBudget=full.actualBudget||{};
+  actualBudgetNotes=full.actualBudgetNotes||{};
   // Reset undo stack on vault switch
   undoStack=[];
 }
@@ -3657,8 +3659,18 @@ function renderEingabeNav(){
   if(delBtn)delBtn.style.display=curM&&db[curM]?'inline-flex':'none';
 }
 
-function onMonthChange(m){currentEntryMonth=m;bpIstMonth=m;renderEingabeNav();renderForm()}
-function selectMonth(m){currentEntryMonth=m;bpIstMonth=m;renderEingabeNav();renderForm()}
+function onMonthChange(m){
+  currentEntryMonth=m;bpIstMonth=m;
+  renderEingabeNav();
+  if(currentPositionsTab==='ausgaben')renderAusgabenEingabe();
+  else renderForm();
+}
+function selectMonth(m){
+  currentEntryMonth=m;bpIstMonth=m;
+  renderEingabeNav();
+  if(currentPositionsTab==='ausgaben')renderAusgabenEingabe();
+  else renderForm();
+}
 async function deleteMonthFromList(m){
   if(!confirm(`Monat ${fmtM(m)} komplett löschen (beide Personen)?`))return;
   delete db[m];delete notes[m];
@@ -4897,8 +4909,7 @@ function renderBudget(){
   let h=`
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:14px;flex-wrap:wrap">
     <div class="bp-segment">
-      <button class="bp-seg-btn ${budgetMode==='gemeinsam'?'active':''}" onclick="setBudgetMode('gemeinsam')">Gemeinsam</button>
-      <button class="bp-seg-btn ${budgetMode==='getrennt'?'active':''}" onclick="setBudgetMode('getrennt')">Pro Person</button>
+<!-- Pro-Person-Toggle entfernt — nur Gemeinsam -->
     </div>
     <div style="font-size:11px;color:var(--tx2);font-family:var(--fb);text-align:right;max-width:320px">
       ${budgetMode==='gemeinsam'?'Ein Betrag pro Position — gilt für den ganzen Haushalt':'Separate Beträge pro Person — Summe wird automatisch gebildet'}
@@ -5908,20 +5919,32 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
   </div>`;
 
   return `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--bdr)">
-    <div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:5px">Pensum × Kita-Matrix</div>
-    <div style="font-size:10.5px;color:var(--tx2);line-height:1.55;margin-bottom:14px">
-      Alle Kombinationen aus Pensum und Kita-Tagen mit dem resultierenden Überschuss/Defizit pro Monat. <strong>Familien-Tage</strong> = Wochentage zu Hause, also Zeit fürs Kind. <span style="color:var(--bl);font-weight:500">Blau umrandet</span> = aktuelle Konstellation. Aktuell: ${fmt(Math.round(currentUeberschuss))}/Mt bei ${currentP1}% × ${currentP2}% × ${currentKitaTage} Kita-Tage.
+    <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase">Kita × Überschuss</div>
+      <div style="font-size:10px;color:var(--tx3)">Aktuell: ${currentP1}% / ${currentP2}% / ${currentKitaTage} Tage → <strong style="color:${currentUeberschuss>=0?'var(--gr)':'var(--rd)'}">${currentUeberschuss>=0?'+':''}${fmt(Math.round(currentUeberschuss))}/Mt</strong></div>
     </div>
-    ${buildMatrix(`${n1()} variiert`, 'p2', currentP2, n1())}
-    ${buildMatrix(`${n2()} variiert`, 'p1', currentP1, n2())}
-    ${equalMatrix}
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;padding:9px 12px;background:var(--bg3);border-radius:8px;font-size:10px;color:var(--tx3);font-family:var(--fm)">
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(248,113,113,0.20)"></span>Defizit > 500</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(251,146,60,0.18)"></span>Defizit</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(251,191,36,0.13)"></span>Knapp</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(74,222,128,0.13)"></span>OK</span>
-      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(74,222,128,0.30)"></span>Überschuss &gt; 1800</span>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table style="border-collapse:separate;border-spacing:2px;font-size:10.5px;font-family:var(--fm);width:100%;min-width:360px">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:5px 8px;color:var(--tx3);font-weight:500;font-size:9px;white-space:nowrap">${n1()} / ${n2()}</th>
+          ${kitaLevels.map(kt=>`<th style="text-align:center;padding:5px 4px;color:var(--tx3);font-weight:500;font-size:9px">${kt}T<br><span style="font-weight:400;font-size:8.5px">${5-kt}♥</span></th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${[100,90,80,70,60,50].map(p1=>[100,90,80,70,60,50].filter(p2=>p2<=p1+20&&p2>=p1-20).map(p2=>{
+          const cells=kitaLevels.map(kt=>{
+            const ueb=calcScenario(p1,p2,kt);
+            const isCurrent=p1===currentP1&&p2===currentP2&&kt===currentKitaTage;
+            const{bg,col}=colorFor(ueb);
+            return `<td style="text-align:center;padding:6px 4px;background:${bg};border-radius:4px;color:${col};font-weight:500;font-size:10px;${isCurrent?'outline:2px solid var(--bl);outline-offset:-1px;':''}">${ueb>=0?'+':''}${Math.round(ueb/100)*100}</td>`;
+          }).join('');
+          return `<tr><td style="text-align:left;padding:5px 8px;color:var(--tx);white-space:nowrap;font-size:10px">${p1}% / ${p2}%</td>${cells}</tr>`;
+        })).flat().join('')}
+      </tbody>
+    </table>
     </div>
+    <div style="font-size:9.5px;color:var(--tx3);margin-top:7px;font-family:var(--fm)">♥ = Familien-Tage/Woche · Blau = aktuelle Wahl · Werte in CHF/Mt (gerundet)</div>
   </div>`;
 }
 
@@ -5939,11 +5962,20 @@ function getBudgetCatPlan(catId){
 }
 
 function getBudgetCats(){
-  return getBudget().map(c=>({
+  const cats=getBudget().map(c=>({
     id:c.id,
     label:c.label,
     plan:getBudgetCatPlan(c.id)
   }));
+  // Kita: add if not already in budget items but income has kinder
+  const kitaInBudget=cats.some(c=>c.id==='kind')&&getBudget().find(c=>c.id==='kind')?.items.some(i=>i.id==='kita'&&budgetItemAmt(i)>0);
+  if(!kitaInBudget&&(income.kinder||0)>0){
+    const kita=calcKitaKosten();
+    if(kita.monat>0){
+      cats.push({id:'__kita__',label:'Kita (aus Budgetplan)',plan:Math.round(kita.monat)});
+    }
+  }
+  return cats;
 }
 
 function saveActualBudget(month, catId, val){
@@ -5965,11 +5997,10 @@ function renderAusgabenEingabe(){
 
   let h=`
   <div style="padding-bottom:8px">
-    <!-- Month picker -->
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-      <div style="font-size:11px;color:var(--tx2);flex-shrink:0;font-weight:500">Monat:</div>
-      <input type="month" value="${bpIstMonth}" onchange="bpIstMonth=this.value;renderAusgabenEingabe()"
-        style="flex:1;max-width:200px;padding:7px 11px;background:var(--bg3);border:1px solid var(--bdr);border-radius:8px;color:var(--tx);font-family:var(--fb);font-size:12px">
+    <!-- Info: Monat wird oben über Konten-Navigation gewählt -->
+    <div style="background:var(--bg3);border-radius:9px;padding:9px 13px;margin-bottom:14px;font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:8px">
+      <span style="font-size:15px">📅</span>
+      <span>Monat: <strong>${fmtM(bpIstMonth)||'—'}</strong> — oben über die Monats-Navigation wechseln</span>
     </div>
     <!-- Quick KPI -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:18px">
@@ -5990,14 +6021,24 @@ function renderAusgabenEingabe(){
     const diff=istVal>0?istVal-cat.plan:null;
     const diffColor=diff===null?'var(--tx3)':diff<=0?'var(--gr)':'var(--rd)';
     const rowBg=i%2===0?'var(--bg3)':'var(--bg2)';
-    h+=`<div style="display:flex;align-items:center;gap:10px;padding:11px 13px;background:${rowBg};${i===0?'border-radius:10px 10px 0 0':''}${i===cats.length-1?';border-radius:0 0 10px 10px':''}">
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;color:var(--tx);font-weight:500">${escapeHTML(cat.label)}</div>
-        <div style="font-size:9.5px;color:var(--tx3);font-family:var(--fm);margin-top:1px">Plan: ${fmt(cat.plan)}/Mt${diff!==null?` · <span style="color:${diffColor}">${diff>=0?'+':''}${fmt(diff)}</span>`:''}</div>
+    const noteVal=(actualBudgetNotes[bpIstMonth]||{})[cat.id]||'';
+    h+=`<div style="background:${rowBg};${i===0?'border-radius:10px 10px 0 0':''}${i===cats.length-1?';border-radius:0 0 10px 10px':''}">
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 13px;">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--tx);font-weight:500">${escapeHTML(cat.label)}</div>
+          <div style="font-size:9.5px;color:var(--tx3);font-family:var(--fm);margin-top:1px">Plan: ${fmt(cat.plan)}/Mt${diff!==null?` · <span style="color:${diffColor}">${diff>=0?'+':''}${fmt(diff)}</span>`:''}</div>
+        </div>
+        <button onclick="toggleAusgabenNote('${cat.id}')" title="${noteVal?'Kommentar: '+escapeHTML(noteVal):'Kommentar hinzufügen'}"
+          style="background:${noteVal?'rgba(251,191,36,0.15)':'transparent'};border:1px solid ${noteVal?'rgba(251,191,36,0.4)':'var(--bdr)'};border-radius:6px;padding:5px 8px;cursor:pointer;font-size:13px;flex-shrink:0;color:${noteVal?'var(--am)':'var(--tx3)'}" title="Kommentar">💬</button>
+        <input type="number" value="${istVal||''}" placeholder="${fmt(cat.plan)}" min="0" step="10"
+          oninput="saveAusgabeEingabe('${cat.id}',this.value,${cat.plan})"
+          style="width:110px;padding:8px 11px;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;color:var(--tx);font-family:var(--fm);font-size:13.5px;text-align:right;flex-shrink:0">
       </div>
-      <input type="number" value="${istVal||''}" placeholder="${fmt(cat.plan)}" min="0" step="10"
-        oninput="saveAusgabeEingabe('${cat.id}',this.value,${cat.plan})"
-        style="width:110px;padding:8px 11px;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;color:var(--tx);font-family:var(--fm);font-size:13.5px;text-align:right;flex-shrink:0">
+      <div id="note-row-${cat.id}" style="display:${noteVal?'block':'none'};padding:0 13px 11px">
+        <input type="text" id="note-inp-${cat.id}" value="${escapeHTML(noteVal)}" placeholder="Kommentar z.B. 'Jahresrechnung Strom'" maxlength="120"
+          oninput="saveAusgabenNote('${cat.id}',this.value)"
+          style="width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--am);border-radius:7px;color:var(--tx);font-family:var(--fb);font-size:11.5px;box-sizing:border-box">
+      </div>
     </div>`;
   });
 
@@ -6009,6 +6050,34 @@ function renderAusgabenEingabe(){
   </div>`;
 
   body.innerHTML=h;
+}
+
+function toggleAusgabenNote(catId){
+  const row=document.getElementById('note-row-'+catId);
+  if(!row)return;
+  const visible=row.style.display!=='none';
+  row.style.display=visible?'none':'block';
+  if(!visible)setTimeout(()=>document.getElementById('note-inp-'+catId)?.focus(),50);
+}
+
+function saveAusgabenNote(catId, val){
+  if(!actualBudgetNotes[bpIstMonth])actualBudgetNotes[bpIstMonth]={};
+  if(val.trim()){
+    actualBudgetNotes[bpIstMonth][catId]=val.trim();
+  }else{
+    delete actualBudgetNotes[bpIstMonth][catId];
+    if(Object.keys(actualBudgetNotes[bpIstMonth]).length===0)delete actualBudgetNotes[bpIstMonth];
+  }
+  // Update button color live
+  const btn=document.querySelector(`button[onclick="toggleAusgabenNote('${catId}')"]`);
+  if(btn){
+    const hasNote=!!val.trim();
+    btn.style.background=hasNote?'rgba(251,191,36,0.15)':'transparent';
+    btn.style.borderColor=hasNote?'rgba(251,191,36,0.4)':'var(--bdr)';
+    btn.style.color=hasNote?'var(--am)':'var(--tx3)';
+  }
+  if(window._abSaveTimer)clearTimeout(window._abSaveTimer);
+  window._abSaveTimer=setTimeout(async()=>{await pushAll();window._abSaveTimer=null},800);
 }
 
 function saveAusgabeEingabe(catId, val, plan){
@@ -6047,8 +6116,11 @@ function renderBpIst(){
   const yearMonths=Array.from({length:12},(_,i)=>`${bpIstYear}-${String(i+1).padStart(2,'0')}`);
   const monthNames=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
 
-  // Year-level totals for summary KPIs
-  const recordedMonths=yearMonths.filter(m=>actualBudget[m]&&Object.keys(actualBudget[m]).length>0);
+  // Year-level totals for summary KPIs — only months with ANY actual data
+  const recordedMonths=yearMonths.filter(m=>{
+    const d=actualBudget[m];
+    return d&&Object.values(d).some(v=>v>0);
+  });
   const planTotal=cats.reduce((s,c)=>s+c.plan,0);
   const avgIstTotal=recordedMonths.length>0
     ?recordedMonths.reduce((s,m)=>s+cats.reduce((cs,c)=>cs+(actualBudget[m]?.[c.id]||0),0),0)/recordedMonths.length
@@ -6097,7 +6169,7 @@ function renderBpIst(){
         ${cats.map((cat,ci)=>{
           const monthVals=yearMonths.map(m=>{
             const v=actualBudget[m]?.[cat.id];
-            return (v!==undefined)?v:null;
+            return (v!==undefined&&v>0)?v:null;  // only count explicit entries > 0
           });
           const recorded=monthVals.filter(v=>v!==null&&v>0);
           const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
@@ -6113,7 +6185,9 @@ function renderBpIst(){
               const overPlan=v!==null&&v>cat.plan;
               const cellBg=isCur?'rgba(96,165,250,0.07)':'';
               const cellColor=v===null?'':overPlan?'var(--rd)':v>0?'var(--tx)':'var(--tx3)';
-              return `<td style="text-align:right;padding:9px 6px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${cellBg?'background:'+cellBg+';':''}">${v!==null&&v>0?fmt(v):'<span style="color:var(--bdr2)">—</span>'}</td>`;
+              const hasNote=!!(actualBudgetNotes[m]?.[cat.id]);
+              const noteTitle=hasNote?actualBudgetNotes[m][cat.id]:'';
+              return `<td style="text-align:right;padding:8px 6px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${cellBg?'background:'+cellBg+';':''};position:relative" title="${escapeHTML(noteTitle)}">${v!==null&&v>0?`${fmt(v)}${hasNote?`<span style="position:absolute;top:4px;right:3px;font-size:6px;color:var(--am)">●</span>`:''}`:''}</td>`;
             }).join('')}
             <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
             <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(cat.plan)}</td>
@@ -6152,6 +6226,7 @@ function renderBpIst(){
   <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:10px;color:var(--tx3);font-family:var(--fm)">
     <span>Aktueller Monat <span style="background:rgba(96,165,250,0.15);border-radius:3px;padding:1px 5px">blau</span></span>
     <span style="color:var(--rd)">Rot = über Plan</span>
+    <span style="color:var(--am)">● = Kommentar vorhanden</span>
     <span>Ø aus erfassten Monaten · Hochr. = Δ × 12</span>
   </div>`;
 
