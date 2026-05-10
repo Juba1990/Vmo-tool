@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='29.0.0';
+const APP_VERSION='30.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -6385,244 +6385,335 @@ function renderBpVerlauf(){
 
 // ══ FIRE-RECHNER ══
 
+
 function getFireDefaults(){
-  // Pull data from current vault state
   const ms=validMonths(currentView);
   const lastM=ms.length?ms[ms.length-1]:null;
-  const lastT=lastM?getT(lastM,currentView):{gesamt:0,cash:0,anlagen:0};
 
-  // Free assets = gesamt minus PK and 3a (bfsExcluded cats)
+  // Asset breakdown using cats:
+  // - bfsExcluded = Säule 2 (PK) + Säule 3a
+  // - We further split using renteParams for PK values
+  // - Free assets = everything NOT bfsExcluded
   const bfsExcIds=getCats().filter(c=>c.bfsExcluded).flatMap(c=>c.items.map(i=>i.id));
-  let freeAssets=0, pkAnd3a=0;
+  let freeAssets=0, s3aAssets=0;
+
+  // Try to identify 3a accounts (label contains '3a' or '3. Säule')
+  const s3aIds=getCats().filter(c=>c.bfsExcluded).flatMap(c=>
+    c.items.filter(i=>/3a|säule 3|3\. säule/i.test(i.label)).map(i=>i.id)
+  );
+  const pkIds=getCats().filter(c=>c.bfsExcluded).flatMap(c=>
+    c.items.filter(i=>!/3a|säule 3|3\. säule/i.test(i.label)).map(i=>i.id)
+  );
+
   if(lastM){
     ['ich','partner','kinder'].forEach(p=>{
       const e=db[lastM]?.[p]||{};
       Object.keys(e).forEach(k=>{
         if(typeof e[k]!=='number'||k==='einkommen'||k==='investiert')return;
-        if(bfsExcIds.includes(k))pkAnd3a+=e[k];
-        else freeAssets+=e[k];
+        if(s3aIds.includes(k)) s3aAssets+=e[k];
+        else if(pkIds.includes(k)){/* PK from renteParams below */}
+        else if(!bfsExcIds.includes(k)) freeAssets+=e[k];
       });
     });
   }
 
-  // PK separately (Säule 2)
-  const pkVal=pkAnd3a; // includes both PK and 3a
+  // PK from renteParams (more accurate — user explicitly entered this)
+  const pkAssets=(renteParams?.ich?.pk||0)+(renteParams?.partner?.pk||0);
 
-  // Monthly savings from budget
+  // Monthly household data
   const hh=calcHousehold();
   const bt=budgetTotals();
   const kita=calcKitaKosten();
-  const kitaExtra=bt.total>0&&!getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita'&&budgetItemAmt(i)>0)?kita.monat:0;
-  const ausgaben=bt.total+kitaExtra;
-  const ueberschuss=Math.max(0,hh.nettoMonat-ausgaben);
+  const kitaInBudget=getBudget().find(c=>c.id==='kind')?.items.some(i=>i.id==='kita'&&budgetItemAmt(i)>0);
+  const ausgaben=bt.total+(kitaInBudget?0:kita.monat);
+  const sparrate=Math.max(0,hh.nettoMonat-ausgaben);
 
-  // Birth years → current ages
   const now=new Date();
   const age1=settings.birthYear1?now.getFullYear()-settings.birthYear1:38;
-  const age2=settings.birthYear2?now.getFullYear()-settings.birthYear2:38;
+  const age2=settings.birthYear2?now.getFullYear()-settings.birthYear2:41;
   const avgAge=Math.round((age1+age2)/2);
+  const penAge=Math.round(((renteParams?.ich?.rentenalter||65)+(renteParams?.partner?.rentenalter||65))/2);
 
-  // AHV at 65: rough estimate CHF 2'100/Mt per person (max CHF 2'520, typical ~1'800-2'200)
-  const ahvPerPerson=2100;
+  // AHV estimate: max CHF 2'520/Mt per person, typical for full career ~CHF 2'100
+  const ahvMonatPP=2100;
 
   return {
-    freeAssets:Math.round(freeAssets),
-    pkAnd3a:Math.round(pkAnd3a),
-    totalWealth:Math.round(lastT.gesamt),
-    sparrate:Math.round(ueberschuss),
-    ausgaben:Math.round(ausgaben>0?ausgaben:8500),
-    rendite:parseFloat(projParams.rate)||6,
+    freeAssets:Math.max(0,Math.round(freeAssets)),
+    s3aAssets:Math.max(0,Math.round(s3aAssets)),
+    pkAssets:Math.max(0,Math.round(pkAssets)),
+    totalWealth:Math.round(freeAssets+s3aAssets+pkAssets),
+    sparrate:Math.max(0,Math.round(sparrate)),
+    ausgaben:Math.round(ausgaben>100?ausgaben:8500),
+    rendite:parseFloat(projParams?.rate)||6,
     entnahmeRate:4.0,
-    age1, age2, avgAge,
-    penAge1:renteParams?.ich?.rentenalter||65,
-    penAge2:renteParams?.partner?.rentenalter||65,
-    ahvJahr:(ahvPerPerson*2)*12, // combined AHV CHF/year
-    ahvNichtErwerb:4000, // rough AHV contribution as non-employed per year
-    zugangAlter:60 // PK+3a accessible from ~60
+    age1, age2, avgAge, penAge,
+    zugangAlter3a:60,
+    zugangAlterPK:60,
+    ahvMonatPP,
+    ahvJahrTotal:ahvMonatPP*12*2,
+    ahvNichtErwerbJahr:4000,
+    p1Pensum:Math.round(income?.p1?.pensum||80),
+    p2Pensum:Math.round(income?.p2?.pensum||80),
+    netto1:Math.round(hh.p1?.netto/12||0),
+    netto2:Math.round(hh.p2?.netto/12||0),
   };
+}
+
+// ── FIRE Calculations (shared) ──
+function calcFireTimeline(fp, overrideSparrate){
+  const sparrate=overrideSparrate!==undefined?overrideSparrate:fp.sparrate;
+  const ausgJahr=fp.ausgaben*12;
+  const entnahme=fp.entnahmeRate/100;
+  const r=fp.rendite/100/12;
+
+  // Total FIRE: 25x Ausgaben
+  const fireZahlTotal=ausgJahr/entnahme;
+
+  // CH-Adjusted: PK & 3a become available at ~60, AHV at 65
+  // Phase 1 target (freie Assets): total minus discounted future PK+3a
+  const jahreBis60=Math.max(1, fp.zugangAlter3a - fp.avgAge);
+  const pk3aNow=fp.pkAssets+fp.s3aAssets;
+  // Conservative: assume PK+3a grows at half the market rate (more conservative)
+  const pk3aAt60=pk3aNow*Math.pow(1+fp.rendite/100*0.5, jahreBis60);
+  // We only count 80% of PK+3a (tax, fees, conservative)
+  const pk3aCredit=pk3aAt60*0.8;
+  const fireZahlFreieAssets=Math.max(ausgJahr*8, fireZahlTotal - pk3aCredit);
+
+  // Timeline simulation
+  let wealth=fp.freeAssets, months=0;
+  while(wealth<fireZahlFreieAssets && months<1200){
+    wealth=wealth*(1+r)+sparrate;
+    months++;
+  }
+  const yrs=months>=1200?null:Math.ceil(months/12);
+  const fireYear=yrs?new Date().getFullYear()+yrs:null;
+
+  // Coast FIRE: does current wealth grow to target without contributions?
+  const coastTarget=yrs?fp.freeAssets/Math.pow(1+fp.rendite/100,yrs):null;
+  const isCoast=coastTarget!==null&&fp.freeAssets>=coastTarget;
+
+  // Partial FIRE: how much do you need to cover fixed costs only?
+  const fixkostenJahr=(fp.ausgaben*12)*0.6; // ~60% = fixed (rent, insurance, food)
+  const partialFireZahl=fixkostenJahr/entnahme;
+  const isPartialFire=fp.freeAssets>=partialFireZahl;
+
+  return {fireZahlTotal, fireZahlFreieAssets, pk3aCredit, yrs, fireYear,
+    fireAge1:yrs?fp.age1+yrs:null, fireAge2:yrs?fp.age2+yrs:null,
+    isCoast, coastTarget, isPartialFire, partialFireZahl,
+    pctReached:Math.min(100,fp.freeAssets/Math.max(1,fireZahlFreieAssets)*100)};
 }
 
 function renderFireRechner(){
   const body=document.getElementById('proj-body');
   if(!body)return;
-
-  // Initialize or reset to defaults
   if(!fireParams)fireParams={...getFireDefaults()};
   const fp=fireParams;
   const def=getFireDefaults();
+  const fmtC=n=>fmtN(Math.round(n));
 
-  // === RECHNER 1: FIRE-STATUS ===
+  const calc=calcFireTimeline(fp);
+  const {fireZahlTotal,fireZahlFreieAssets,pk3aCredit,yrs,fireYear,
+    fireAge1,fireAge2,isCoast,isPartialFire,partialFireZahl,pctReached}=calc;
 
-  // 4%-Regel FIRE-Zahl basierend auf Ausgaben
-  // CH-Anpassung: nach 65 reduziert AHV die benötigte Entnahme
-  const ausgabenJahr=fp.ausgaben*12;
-  const ahvEntlastungJahr=fp.ahvJahr; // ab 65
-  const ausgabenVorAHV=ausgabenJahr;
-  const ausgabenNachAHV=Math.max(0,ausgabenJahr-ahvEntlastungJahr);
-
-  // FIRE-Zahl: wir rechnen mit gewichteter Formel
-  // Phase 1 (jetzt bis 60): nur freie Assets, + AHV-Beiträge als Nicht-Erwerbstätige
-  // Phase 2 (60-65): + PK & 3a zugänglich
-  // Phase 3 (ab 65): + AHV, deutlich weniger Entnahme nötig
-  // Vereinfachung: FIRE-Zahl basiert auf Ausgaben vor AHV, AHV ab 65 reduziert Entnahme
-  const fireZahlTotal=ausgabenJahr/(fp.entnahmeRate/100);
-
-  // Freie Assets FIRE: Ausgaben × 25, aber ab 60 kommen PK+3a dazu → braucht weniger
-  // Vereinfachte Formel: freie Assets müssen Phase 1 (jetzt bis 60) abdecken
-  // Plus Rest wird durch PK+3a+AHV gedeckt
-  const jahreBis60=Math.max(0, fp.zugangAlter - fp.avgAge);
-  const pkAnd3aZukünftig=fp.pkAnd3a*(1+fp.rendite/100)**jahreBis60; // Wachstum bis 60
-  const fireZahlFreieAssets=Math.max(0, fireZahlTotal - pkAnd3aZukünftig*0.7); // 70% der PK+3a als konservative Anrechnung
-
-  // Timeline: wie lange bis freie Assets die FIRE-Zahl erreichen?
-  const r=fp.rendite/100/12;
-  let wealth=fp.freeAssets, months=0;
-  const target=fireZahlFreieAssets;
-  while(wealth<target && months<1200){
-    wealth=wealth*(1+r)+fp.sparrate;
-    months++;
-  }
-  const yrsToFire=Math.ceil(months/12);
-  const fireYear=new Date().getFullYear()+yrsToFire;
-  const fireAge1=fp.age1+yrsToFire;
-  const fireAge2=fp.age2+yrsToFire;
-
-  // Coast FIRE: braucht freie Assets heute das Ziel bis 60 zu erreichen?
-  const coastTarget=fireZahlFreieAssets/Math.pow(1+fp.rendite/100, Math.max(1,yrsToFire));
-  const isCoast=fp.freeAssets>=coastTarget;
-
-  // Entnahme bei aktuellem Vermögen
-  const entnahmeJetzt=fp.freeAssets*fp.entnahmeRate/100/12;
-
-  // Pensum-Simulation Defaults
-  const p1Def=settings?.birthYear1?Math.round(income?.p1?.pensum||80):80;
-  const p2Def=settings?.birthYear2?Math.round(income?.p2?.pensum||80):80;
-
-  const fmtCHF=n=>fmtN(Math.round(n));
-  const pct=Math.min(100,fp.freeAssets/Math.max(1,fireZahlFreieAssets)*100);
+  const entnahme4=fp.freeAssets*4/100/12;
+  const jahreBis60=Math.max(1,fp.zugangAlter3a-fp.avgAge);
 
   let h=`
-  <!-- Reset Button -->
-  <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-    <button onclick="fireParams=null;renderFireRechner()" style="display:flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:6px 12px;font-size:11px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Auf aktuelle Daten zurücksetzen</button>
-  </div>
-
-  <!-- RECHNER 1: FIRE-STATUS -->
-  <div class="widget" style="margin-bottom:14px">
-    <div class="widget-hd">
+  <!-- Grunddaten Box -->
+  <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:11px;font-weight:500;color:var(--tx2);text-transform:uppercase;letter-spacing:.04em">Grunddaten für FIRE-Berechnung</div>
+      <button onclick="fireParams=null;renderFireRechner()" style="display:flex;align-items:center;gap:5px;background:var(--bg);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Zurücksetzen</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
       <div>
-        <div class="widget-title">🔥 FIRE-Status</div>
-        <div class="widget-title-sub">Wann seid ihr finanziell unabhängig? · Schweizer 3-Phasen-Modell</div>
+        <div style="font-size:9.5px;color:var(--tx3);margin-bottom:2px">Freie Assets (Cash + Depot)</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" value="${fp.freeAssets}" min="0" step="1000"
+            oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.freeAssets=+this.value||0;renderFireRechner()"
+            style="width:100%;padding:5px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12px;text-align:right">
+        </div>
+        <div style="font-size:9px;color:var(--tx3);margin-top:2px">Auto: ${fmtC(def.freeAssets)}</div>
+      </div>
+      <div>
+        <div style="font-size:9.5px;color:var(--tx3);margin-bottom:2px">Säule 3a (alle Konten)</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" value="${fp.s3aAssets}" min="0" step="1000"
+            oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.s3aAssets=+this.value||0;renderFireRechner()"
+            style="width:100%;padding:5px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12px;text-align:right">
+        </div>
+        <div style="font-size:9px;color:var(--tx3);margin-top:2px">Auto: ${fmtC(def.s3aAssets)} · ab Alter ~60</div>
+      </div>
+      <div>
+        <div style="font-size:9.5px;color:var(--tx3);margin-bottom:2px">Pensionskasse (PK)</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" value="${fp.pkAssets}" min="0" step="1000"
+            oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.pkAssets=+this.value||0;renderFireRechner()"
+            style="width:100%;padding:5px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12px;text-align:right">
+        </div>
+        <div style="font-size:9px;color:var(--tx3);margin-top:2px">Aus Rentenrechner: ${fmtC(def.pkAssets)} · ab Alter ~60</div>
+      </div>
+      <div>
+        <div style="font-size:9.5px;color:var(--tx3);margin-bottom:2px">Monatliche Sparrate</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="number" value="${fp.sparrate}" min="0" step="100"
+            oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.sparrate=+this.value||0;renderFireRechner()"
+            style="width:100%;padding:5px 8px;background:var(--bg);border:1px solid var(--bdr);border-radius:6px;color:var(--tx);font-family:var(--fm);font-size:12px;text-align:right">
+        </div>
+        <div style="font-size:9px;color:var(--tx3);margin-top:2px">Auto: ${fmtC(def.sparrate)}/Mt · Überschuss Budgetplan</div>
       </div>
     </div>
-    <div class="widget-body">
-
-      <!-- KPIs -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
-          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Ziel (Freie Assets)</div>
-          <div class="blur-val" style="font-family:var(--fm);font-size:16px;font-weight:500;color:var(--tx);letter-spacing:-.3px">${fmtCHF(fireZahlFreieAssets)}</div>
-          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Gesamt-FIRE: ${fmtCHF(fireZahlTotal)}</div>
+    <!-- Sliders for assumptions -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--tx2);margin-bottom:4px">
+          <span>Ausgaben/Mt (FIRE)</span>
+          <strong id="fp-ausg-out" style="font-family:var(--fm)">${fmtC(fp.ausgaben)}</strong>
         </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
-          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Freie Assets heute</div>
-          <div class="blur-val" style="font-family:var(--fm);font-size:16px;font-weight:500;color:var(--tx);letter-spacing:-.3px">${fmtCHF(fp.freeAssets)}</div>
-          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">+ PK/3a: ${fmtCHF(fp.pkAnd3a)} (ab ~60)</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
-          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
-          <div style="font-family:var(--fm);font-size:16px;font-weight:500;color:${months>=1200?'var(--rd)':'var(--gr)'};letter-spacing:-.3px">${months>=1200?'> 100 J.':fireYear}</div>
-          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">In ${yrsToFire} J. · ${n1()} ${fireAge1}J. · ${n2()} ${fireAge2}J.</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
-          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Coast FIRE</div>
-          <div style="font-family:var(--fm);font-size:16px;font-weight:500;color:${isCoast?'var(--gr)':'var(--am)'};letter-spacing:-.3px">${isCoast?'✓ Erreicht':'Noch nicht'}</div>
-          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${isCoast?'Ohne Sparen ans Ziel':'Fehlt '+fmtCHF(coastTarget-fp.freeAssets)}</div>
-        </div>
+        <input type="range" min="3000" max="20000" step="100" value="${fp.ausgaben}"
+          oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.ausgaben=+this.value;document.getElementById('fp-ausg-out').textContent=fmtN(+this.value);renderFireRechner()">
       </div>
-
-      <!-- Progress bar -->
-      <div style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);margin-bottom:5px;font-family:var(--fm)">
-          <span>Freie Assets ${fmtCHF(fp.freeAssets)}</span>
-          <span style="color:${pct>=100?'var(--gr)':'var(--tx3)'}"><strong>${pct.toFixed(1)}%</strong> erreicht</span>
-          <span>Ziel ${fmtCHF(fireZahlFreieAssets)}</span>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--tx2);margin-bottom:4px">
+          <span>Rendite p.a.</span>
+          <strong id="fp-rend-out" style="font-family:var(--fm)">${fp.rendite}%</strong>
         </div>
-        <div style="height:10px;background:var(--bg3);border-radius:5px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${pct>=100?'var(--gr)':pct>=60?'var(--am)':'var(--bl)'};border-radius:5px;transition:width .3s"></div>
-        </div>
+        <input type="range" min="2" max="12" step="0.5" value="${fp.rendite}"
+          oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams.rendite=+this.value;document.getElementById('fp-rend-out').textContent=this.value+'%';renderFireRechner()">
       </div>
-
-      <!-- 3-Phasen Erklärung CH -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-        <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:9px;padding:10px 11px">
-          <div style="font-size:9.5px;font-weight:500;color:var(--rd);margin-bottom:4px">Phase 1 · Heute–60</div>
-          <div style="font-size:10px;color:var(--tx2);line-height:1.5">Nur freie Assets<br>+ AHV-Beiträge als Nicht-Erwerbstätige<br><strong style="font-family:var(--fm)">~CHF ${fmtCHF(fp.ahvNichtErwerb)}/J</strong></div>
-        </div>
-        <div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:9px;padding:10px 11px">
-          <div style="font-size:9.5px;font-weight:500;color:var(--am);margin-bottom:4px">Phase 2 · 60–65</div>
-          <div style="font-size:10px;color:var(--tx2);line-height:1.5">+ PK & Säule 3a<br>zugänglich (gestaffelt!)<br><strong style="font-family:var(--fm)">~CHF ${fmtCHF(fp.pkAnd3a)}</strong></div>
-        </div>
-        <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:9px;padding:10px 11px">
-          <div style="font-size:9.5px;font-weight:500;color:var(--gr);margin-bottom:4px">Phase 3 · Ab 65</div>
-          <div style="font-size:10px;color:var(--tx2);line-height:1.5">+ AHV-Rente<br>~CHF ${fmtCHF(fp.ahvJahr/12)}/Mt<br>Entnahme sinkt</div>
-        </div>
+    </div>
+    <!-- Inflation slider -->
+    <div style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--tx2);margin-bottom:4px">
+        <span>Inflation p.a. (beeinflusst reale FIRE-Zahl)</span>
+        <strong id="fp-infl-out" style="font-family:var(--fm)">${fp._inflation||2}%</strong>
       </div>
-
-      <!-- Entnahme-Tabelle -->
-      <div style="font-size:10.5px;font-weight:500;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Entnahme heute (Freie Assets)</div>
-      <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px">
-        ${[3,3.5,4,4.5].map(rate=>{
-          const m=fp.freeAssets*rate/100/12;
-          const isBase=rate===4;
-          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 11px;background:${isBase?'rgba(74,222,128,0.08)':'var(--bg3)'};border-radius:7px;${isBase?'border:1px solid rgba(74,222,128,0.2)':''}">
-            <div style="flex:1;font-size:11px;color:var(--tx)">${rate}% Entnahmerate${isBase?' (Standard 4%-Regel)':''}</div>
-            <div class="blur-val" style="font-family:var(--fm);font-size:12px;font-weight:${isBase?'600':'400'};color:${isBase?'var(--gr)':'var(--tx)'}">${fmtCHF(m)}/Mt</div>
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- Slider controls -->
-      <div style="padding-top:12px;border-top:1px solid var(--bdr)">
-        <div style="font-size:10.5px;font-weight:500;color:var(--tx2);margin-bottom:12px;text-transform:uppercase;letter-spacing:.04em">Parameter anpassen</div>
-        ${[
-          {label:'Monatliche Ausgaben',id:'fp-ausgaben',min:3000,max:20000,step:100,val:fp.ausgaben,fmt:v=>fmtCHF(v)+'/Mt',update:`fireParams.ausgaben=+this.value`},
-          {label:'Monatliche Sparrate',id:'fp-sparrate',min:0,max:10000,step:100,val:fp.sparrate,fmt:v=>fmtCHF(v)+'/Mt',update:`fireParams.sparrate=+this.value`},
-          {label:'Rendite p.a.',id:'fp-rendite',min:2,max:12,step:0.5,val:fp.rendite,fmt:v=>v+'%',update:`fireParams.rendite=+this.value`},
-          {label:'Entnahmerate',id:'fp-entnahme',min:2,max:6,step:0.1,val:fp.entnahmeRate,fmt:v=>v+'%',update:`fireParams.entnahmeRate=+this.value`},
-        ].map(s=>`<div style="margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-            <span>${s.label}</span>
-            <strong id="${s.id}-out" style="color:var(--tx);font-family:var(--fm)">${s.fmt(s.val)}</strong>
-          </div>
-          <input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.val}"
-            oninput="${s.update};renderFireRechner()">
-        </div>`).join('')}
-      </div>
-
-      <!-- AHV Hinweis -->
-      <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
-        ⚠ <strong>CH-Achtung:</strong> Als Nicht-Erwerbstätige müsst ihr bis 65 AHV-Beiträge zahlen (~CHF ${fmtCHF(fp.ahvNichtErwerb)}/Jahr, je nach Vermögen mehr). Empfehlung: <strong>Barista FIRE</strong> — einer arbeitet minimal (CHF 10k+/Jahr) → AHV und PK bleiben aktiv, Beiträge fallen weg.
-      </div>
+      <input type="range" min="0.5" max="5" step="0.5" value="${fp._inflation||2}"
+        oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._inflation=+this.value;document.getElementById('fp-infl-out').textContent=this.value+'%';renderFireRechner()">
     </div>
   </div>
 
-  <!-- RECHNER 2: PENSUM-SIMULATION -->
-  <div class="widget" style="margin-bottom:14px">
-    <div class="widget-hd">
-      <div>
-        <div class="widget-title">👥 Pensum-Simulation</div>
-        <div class="widget-title-sub">Was wenn ihr weniger arbeitet?</div>
+  <!-- FIRE Begriffe Erklärung -->
+  <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+    ${[
+      {icon:'🔥',term:'FIRE',color:'var(--rd)',
+       text:`Du brauchst das <strong>${fmtC(fp.ausgaben*12/(fp.entnahmeRate/100))}</strong> — 25× deine Jahresausgaben. Dann kannst du 4% pro Jahr entnehmen ohne das Kapital langfristig anzutasten.`},
+      {icon:'🌊',term:'Coast FIRE',color:'var(--bl)',
+       text:`Dein aktuelles Depot wächst allein durch Marktrenditen bis zur FIRE-Zahl — ${isCoast?'<strong style="color:var(--gr)">✓ ihr habt es bereits erreicht!</strong>':'noch nicht erreicht'}. Ihr müsstet nur noch die laufenden Kosten verdienen, nicht mehr aktiv sparen.`},
+      {icon:'☕',term:'Partial / Barista FIRE',color:'var(--am)',
+       text:`Ihr braucht nur noch genug Einkommen für die Fixkosten (Wohnen, Versicherung, Lebensmittel) — das Depot deckt den Rest. Schätzung Fixkosten: ${fmtC(fp.ausgaben*0.6)}/Mt. ${isPartialFire?`<strong style="color:var(--gr)">✓ Bereits erreicht!</strong> Ihr könntet heute auf Fixkosten-Deckung reduzieren.`:`Noch ${fmtC(partialFireZahl-fp.freeAssets)} bis Partial FIRE.`}`},
+    ].map(b=>`<div style="display:flex;gap:10px;padding:10px 12px;background:var(--bg3);border-radius:9px;align-items:flex-start">
+      <span style="font-size:16px;flex-shrink:0;line-height:1.4">${b.icon}</span>
+      <div style="min-width:0">
+        <div style="font-size:11px;font-weight:500;color:${b.color};margin-bottom:2px">${b.term}</div>
+        <div style="font-size:10.5px;color:var(--tx2);line-height:1.55">${b.text}</div>
       </div>
+    </div>`).join('')}
+  </div>
+
+  <!-- Main KPIs -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+    <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Ziel (Freie Assets)</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx)">${fmtC(fireZahlFreieAssets)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">PK+3a deckt ${fmtC(pk3aCredit)} ab Alter ~60</div>
     </div>
-    <div class="widget-body">
-      <div id="fire-pensum-body"><!-- rendered by renderPensumSim() --></div>
+    <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
+      <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${yrs?'var(--gr)':'var(--rd)'}">${fireYear||'> 100 J.'}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${yrs?`In ${yrs} J. · ${n1()} ${fireAge1}J. · ${n2()} ${fireAge2}J.`:'Sparrate erhöhen'}</div>
     </div>
+    <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Freie Assets heute</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx)">${fmtC(fp.freeAssets)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${pctReached.toFixed(1)}% des Ziels</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Entnahme (4%) heute</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx)">${fmtC(entnahme4)}/Mt</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">von ${fmtC(fp.freeAssets)} freien Assets</div>
+    </div>
+  </div>
+
+  <!-- Progress bar -->
+  <div style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);margin-bottom:5px;font-family:var(--fm)">
+      <span class="blur-val">Freie Assets ${fmtC(fp.freeAssets)}</span>
+      <span style="font-weight:500;color:${pctReached>=100?'var(--gr)':'var(--tx2)'}">${pctReached.toFixed(1)}%</span>
+      <span>Ziel ${fmtC(fireZahlFreieAssets)}</span>
+    </div>
+    <div style="height:10px;background:var(--bg3);border-radius:5px;overflow:hidden;position:relative">
+      ${isPartialFire?`<div style="position:absolute;left:${Math.min(100,partialFireZahl/fireZahlFreieAssets*100)}%;top:0;bottom:0;width:1px;background:var(--am);opacity:0.6" title="Partial FIRE"></div>`:''}
+      <div style="height:100%;width:${pctReached}%;background:${pctReached>=100?'var(--gr)':pctReached>=60?'var(--am)':'var(--bl)'};border-radius:5px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:5px;font-size:9.5px;color:var(--tx3);font-family:var(--fm)">
+      ${isPartialFire?`<span style="color:var(--am)">● Partial FIRE erreicht</span>`:`<span>Partial FIRE bei ${fmtC(partialFireZahl)}</span>`}
+      ${isCoast?`<span style="color:var(--bl)">● Coast FIRE erreicht</span>`:''}
+    </div>
+  </div>
+
+  <!-- 3-Phasen CH -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+    <div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:9px;padding:10px 11px">
+      <div style="font-size:9px;font-weight:500;color:var(--rd);margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em">Phase 1</div>
+      <div style="font-size:10px;font-weight:500;color:var(--tx);margin-bottom:3px">Heute → ${fp.zugangAlter3a}</div>
+      <div style="font-size:9.5px;color:var(--tx2);line-height:1.5">Nur freie Assets<br>+ AHV-Beiträge ~${fmtC(fp.ahvNichtErwerbJahr)}/J</div>
+    </div>
+    <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 11px">
+      <div style="font-size:9px;font-weight:500;color:var(--am);margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em">Phase 2</div>
+      <div style="font-size:10px;font-weight:500;color:var(--tx);margin-bottom:3px">${fp.zugangAlter3a} → ${fp.penAge}</div>
+      <div style="font-size:9.5px;color:var(--tx2);line-height:1.5">+ PK & 3a verfügbar<br>Gestaffelt beziehen!</div>
+    </div>
+    <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.18);border-radius:9px;padding:10px 11px">
+      <div style="font-size:9px;font-weight:500;color:var(--gr);margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em">Phase 3</div>
+      <div style="font-size:10px;font-weight:500;color:var(--tx);margin-bottom:3px">Ab ${fp.penAge}</div>
+      <div style="font-size:9.5px;color:var(--tx2);line-height:1.5">+ AHV ~${fmtC(fp.ahvMonatPP)}/Mt/Person</div>
+    </div>
+  </div>
+
+  <!-- Entnahme-Tabelle -->
+  <div style="font-size:10px;color:var(--tx3);font-weight:500;letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px">Entnahme-Szenarien bei FIRE-Datum</div>
+  <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px">
+    ${[3,3.5,4,4.5].map(rate=>{
+      const mNow=fp.freeAssets*rate/100/12;
+      const mAtFire=fireZahlFreieAssets*rate/100/12;
+      const isBase=rate===fp.entnahmeRate;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 11px;background:${isBase?'rgba(74,222,128,0.07)':'var(--bg3)'};border-radius:7px;${isBase?'border:1px solid rgba(74,222,128,0.18)':''}">
+        <div style="flex:1;font-size:10.5px;color:var(--tx)">${rate}%${isBase?' ✓':''}</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:10.5px;color:var(--tx3)">Heute: ${fmtC(mNow)}/Mt</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:11.5px;font-weight:${isBase?'600':'400'};color:${isBase?'var(--gr)':'var(--tx)'}">${yrs?fmtC(mAtFire)+'/Mt':'—'}</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Inflation Hinweis -->
+  ${(()=>{
+    const infl=fp._inflation||2;
+    const yrsN=yrs||15;
+    const realAusg=fp.ausgaben*Math.pow(1+infl/100,yrsN);
+    const realFireZahl=realAusg*12/(fp.entnahmeRate/100);
+    const diff=realFireZahl-fireZahlFreieAssets;
+    return `<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;margin-bottom:14px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+      📊 <strong>Inflations-Impact (${infl}% p.a.):</strong> Bei FIRE in ${yrsN} Jahren kosten deine heutigen Ausgaben von ${fmtC(fp.ausgaben)}/Mt dann real ${fmtC(Math.round(realAusg))}/Mt.
+      Die inflationsbereinigte FIRE-Zahl wäre ${fmtC(Math.round(realFireZahl))} — das sind ${diff>0?'+':''}${fmtC(Math.round(diff))} ${diff>0?'mehr':'weniger'} als nominal.
+    </div>`;
+  })()}
+
+  <!-- AHV Warning -->
+  <div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+    ⚠ <strong>CH-Achtung:</strong> Als Nicht-Erwerbstätige müsst ihr bis 65 AHV-Beiträge zahlen (~${fmtC(fp.ahvNichtErwerbJahr)}/J, je nach Vermögen bis CHF 25'200/J). Wenn einer <strong>minimal weiterarbeitet</strong> (CHF 10k+/J) läuft AHV für beide automatisch — das ist <strong>Barista FIRE</strong> und deutlich günstiger.
+  </div>
+
+  <!-- PENSUM SIMULATOR -->
+  <div class="widget" style="margin-top:14px">
+    <div class="widget-hd">
+      <div><div class="widget-title">👥 Pensum-Simulation</div>
+      <div class="widget-title-sub">Was wenn ihr weniger arbeitet?</div></div>
+    </div>
+    <div class="widget-body" id="fire-pensum-body"></div>
   </div>`;
 
   body.innerHTML=h;
-
-  // Render pensum sim after DOM is ready
   renderPensumSim();
 }
 
@@ -6630,241 +6721,159 @@ function renderPensumSim(){
   const body=document.getElementById('fire-pensum-body');
   if(!body)return;
   const fp=fireParams||getFireDefaults();
+  const fmtC=n=>fmtN(Math.round(n));
 
-  const p1=fp._simP1||Math.round(income?.p1?.pensum||80);
-  const p2=fp._simP2||Math.round(income?.p2?.pensum||80);
-  const p1Base=Math.round(income?.p1?.pensum||80);
-  const p2Base=Math.round(income?.p2?.pensum||80);
+  const p1Cur=fp._simP1!==undefined?fp._simP1:fp.p1Pensum;
+  const p2Cur=fp._simP2!==undefined?fp._simP2:fp.p2Pensum;
 
-  // Netto-Berechnung bei geändertem Pensum (Lohn skaliert linear)
-  const hh=calcHousehold();
-  const netto1Base=hh.n1Net||0;
-  const netto2Base=hh.n2Net||0;
-  const netto1Sim=p1Base>0?netto1Base*(p1/p1Base):0;
-  const netto2Sim=p2Base>0?netto2Base*(p2/p2Base):0;
+  // Scale netto linearly with pensum
+  const netto1Sim=fp.p1Pensum>0?fp.netto1*(p1Cur/fp.p1Pensum):0;
+  const netto2Sim=fp.p2Pensum>0?fp.netto2*(p2Cur/fp.p2Pensum):0;
   const nettoSim=netto1Sim+netto2Sim;
-
-  const bt=budgetTotals();
-  const kita=calcKitaKosten();
-  const kitaExtra=bt.total>0&&!getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita'&&budgetItemAmt(i)>0)?kita.monat:0;
-  const ausgaben=bt.total+kitaExtra;
-  const uebSim=nettoSim-ausgaben;
+  const uebSim=nettoSim-fp.ausgaben;
   const spSim=Math.max(0,uebSim);
 
-  // FIRE timeline mit neuer Sparrate
-  const r=fp.rendite/100/12;
-  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
-  let w=fp.freeAssets, mths=0;
-  while(w<fireZahlFreieAssets&&mths<1200){w=w*(1+r)+spSim;mths++}
-  const yrs=Math.ceil(mths/12);
+  // FIRE timeline with new sparrate
+  const simCalc=calcFireTimeline(fp, spSim);
 
-  const fmtCHF=n=>fmtN(Math.round(n));
+  const stopped1=p1Cur===0, stopped2=p2Cur===0;
+  const barista=(p1Cur>0&&income?.p1?.lohn100>0&&fp.netto1*(p1Cur/fp.p1Pensum)*12>10000)||
+                (p2Cur>0&&income?.p2?.lohn100>0&&fp.netto2*(p2Cur/fp.p2Pensum)*12>10000);
 
   body.innerHTML=`
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+  <!-- Quick buttons -->
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+    ${[
+      {l:`${n1()} hört auf`,p1:0,p2:fp.p2Pensum},
+      {l:`${n2()} hört auf`,p1:fp.p1Pensum,p2:0},
+      {l:'Beide 60%',p1:60,p2:60},
+      {l:'Beide 50%',p1:50,p2:50},
+      {l:'Reset',p1:fp.p1Pensum,p2:fp.p2Pensum},
+    ].map(b=>`<button onclick="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=${b.p1};fireParams._simP2=${b.p2};renderPensumSim()"
+      style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">${b.l}</button>`).join('')}
+  </div>
+
+  <!-- Sliders -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
     <div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
         <span>${n1()}</span>
-        <strong id="sim-p1-out" style="color:var(--tx);font-family:var(--fm)">${p1}%</strong>
+        <strong style="color:var(--tx);font-family:var(--fm)">${p1Cur}%</strong>
       </div>
-      <input type="range" min="0" max="100" step="10" value="${p1}"
+      <input type="range" min="0" max="100" step="10" value="${p1Cur}"
         oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=+this.value;renderPensumSim()">
-      <div style="font-size:10px;color:var(--tx3);margin-top:4px;font-family:var(--fm)">Netto ~${fmtCHF(netto1Sim)}/Mt</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px;font-family:var(--fm)">Netto ~${fmtC(netto1Sim)}/Mt</div>
     </div>
     <div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
         <span>${n2()}</span>
-        <strong id="sim-p2-out" style="color:var(--tx);font-family:var(--fm)">${p2}%</strong>
+        <strong style="color:var(--tx);font-family:var(--fm)">${p2Cur}%</strong>
       </div>
-      <input type="range" min="0" max="100" step="10" value="${p2}"
+      <input type="range" min="0" max="100" step="10" value="${p2Cur}"
         oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP2=+this.value;renderPensumSim()">
-      <div style="font-size:10px;color:var(--tx3);margin-top:4px;font-family:var(--fm)">Netto ~${fmtCHF(netto2Sim)}/Mt</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px;font-family:var(--fm)">Netto ~${fmtC(netto2Sim)}/Mt</div>
     </div>
   </div>
 
-  <!-- Quick buttons -->
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-    ${[
-      {label:`${n1()} hört auf`,p1:0,p2:p2Base},
-      {label:`${n2()} hört auf`,p1:p1Base,p2:0},
-      {label:'Beide 50%',p1:50,p2:50},
-      {label:'Beide 60%',p1:60,p2:60},
-      {label:'Reset',p1:p1Base,p2:p2Base},
-    ].map(b=>`<button onclick="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=${b.p1};fireParams._simP2=${b.p2};renderPensumSim()"
-      style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">${b.label}</button>`).join('')}
+  <!-- Result grid -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Haushalt-Netto</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(nettoSim)}/Mt</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Überschuss / Defizit</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${uebSim>=0?'var(--gr)':'var(--rd)'}">${uebSim>=0?'+':''}${fmtC(uebSim)}/Mt</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
+      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${simCalc.fireYear?'var(--gr)':'var(--rd)'}">${simCalc.fireYear||'> 100 J.'}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">In Jahren</div>
+      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${simCalc.yrs?simCalc.yrs+' J.':'—'}</div>
+    </div>
   </div>
 
-  <!-- Result -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Haushalt-Netto</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtCHF(nettoSim)}/Mt</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Überschuss/Defizit</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${uebSim>=0?'var(--gr)':'var(--rd)'}">${uebSim>=0?'+':''}${fmtCHF(uebSim)}/Mt</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
-      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${mths>=1200?'var(--rd)':'var(--gr)'}">${mths>=1200?'> 100 J.':new Date().getFullYear()+yrs}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">In Jahren</div>
-      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${mths>=1200?'—':yrs+' J.'}</div>
-    </div>
-  </div>
-  ${uebSim<0?`<div style="margin-top:10px;padding:9px 12px;background:rgba(248,113,113,0.1);border-radius:8px;font-size:10.5px;color:var(--tx2)">
-    ⚠ Bei diesem Pensum entsteht ein monatliches Defizit von ${fmtCHF(-uebSim)}. Das Vermögen wird abgebaut statt aufgebaut.
+  ${uebSim<0?`<div style="padding:9px 12px;background:rgba(248,113,113,0.08);border-radius:8px;font-size:10.5px;color:var(--tx2);margin-bottom:8px">
+    ⚠ Defizit von ${fmtC(-uebSim)}/Mt — das Vermögen wird langsam verbraucht statt aufgebaut.
   </div>`:''}
-  ${(p1===0||p2===0)?`<div style="margin-top:10px;padding:9px 12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:8px;font-size:10.5px;color:var(--tx2);line-height:1.55">
-    ⚠ <strong>CH-Hinweis:</strong> Wer komplett aufhört verliert PK-Beiträge und muss AHV als Nicht-Erwerbstätiger zahlen. <strong>Barista FIRE</strong> (min. CHF 10k Einkommen) ist steuerlich und vorsorgetechnisch deutlich vorteilhafter.
+  ${simCalc.isPartialFire?`<div style="padding:9px 12px;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;font-size:10.5px;color:var(--tx2);margin-bottom:8px">
+    ☕ <strong>Partial FIRE möglich!</strong> Das Depot deckt bereits mehr als die Fixkosten. Ihr müsst nur noch ${fmtC(fp.ausgaben*0.6)}/Mt verdienen — also rund ${fmtC(fp.ausgaben*0.6/2)}/Mt pro Person.
+  </div>`:''}
+  ${(stopped1||stopped2)&&!barista?`<div style="padding:9px 12px;background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:8px;font-size:10.5px;color:var(--tx2)">
+    ⚠ <strong>CH-Hinweis:</strong> Bei 0% Pensum fallen AHV-Beiträge als Nicht-Erwerbstätiger an (~${fmtC(fp.ahvNichtErwerbJahr)}/J). Barista FIRE (min. CHF 10k Einkommen/Jahr) vermeidet das.
   </div>`:''}`;
 }
 
-// ══ SZENARIEN ══
 function renderSzenarien(){
   const body=document.getElementById('proj-body');
   if(!body)return;
   const fp=fireParams||getFireDefaults();
-  const fmtCHF=n=>fmtN(Math.round(n));
+  const fmtC=n=>fmtN(Math.round(n));
 
-  // Sabbatical Rechner
-  let h=`
-  <!-- SABBATICAL -->
+  const calc=calcFireTimeline(fp);
+  const infl=fp._inflation||2;
+  const yrsN=calc.yrs||15;
+  const ausgJetzt=fp.ausgaben;
+
+  const rows=[5,10,15,20,25,30];
+
+  body.innerHTML=`
+  <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+    <button onclick="fireParams=null;renderSzenarien()" style="display:flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Zurücksetzen</button>
+  </div>
+
   <div class="widget" style="margin-bottom:14px">
-    <div class="widget-hd">
-      <div><div class="widget-title">🌴 Sabbatical-Rechner</div>
-      <div class="widget-title-sub">Was kostet eine Auszeit das FIRE-Ziel?</div></div>
-    </div>
+    <div class="widget-hd"><div>
+      <div class="widget-title">📊 Inflations-Impact</div>
+      <div class="widget-title-sub">Was bedeutet Inflation für eure FIRE-Zahl?</div>
+    </div></div>
     <div class="widget-body">
-      <div id="sabbatical-body"></div>
-    </div>
-  </div>
-
-  <!-- INFLATIONS-CHECK -->
-  <div class="widget" style="margin-bottom:14px">
-    <div class="widget-hd">
-      <div><div class="widget-title">📊 Inflations-Check</div>
-      <div class="widget-title-sub">Was bedeutet Inflation für eure FIRE-Zahl?</div></div>
-    </div>
-    <div class="widget-body" id="inflation-body"></div>
-  </div>`;
-
-  body.innerHTML=h;
-  renderSabbatical();
-  renderInflation();
-}
-
-function renderSabbatical(){
-  const body=document.getElementById('sabbatical-body');
-  if(!body)return;
-  const fp=fireParams||getFireDefaults();
-  const fmtCHF=n=>fmtN(Math.round(n));
-
-  const months=fp._sabbMonths||6;
-  const monthlyBurn=fp._sabbBurn||fp.ausgaben;
-
-  // Cost: lost savings + spent capital
-  const lostSavings=fp.sparrate*months;
-  const capitalSpent=monthlyBurn*months;
-  const totalCost=lostSavings+capitalSpent;
-
-  // FIRE delay: how many months later?
-  const r=fp.rendite/100/12;
-  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
-  let wNormal=fp.freeAssets, mNormal=0;
-  while(wNormal<fireZahlFreieAssets&&mNormal<1200){wNormal=wNormal*(1+r)+fp.sparrate;mNormal++}
-  // After sabbatical: wealth reduced, then restart savings
-  let wSabb=fp.freeAssets-capitalSpent, mSabb=0;
-  while(wSabb<fireZahlFreieAssets&&mSabb<1200){wSabb=wSabb*(1+r)+fp.sparrate;mSabb++}
-  const delaY=Math.max(0,Math.ceil((mSabb+months-mNormal)/12));
-
-  body.innerHTML=`
-  <div style="margin-bottom:12px">
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-      <span>Dauer (Monate)</span>
-      <strong id="sabb-months-out" style="color:var(--tx);font-family:var(--fm)">${months}</strong>
-    </div>
-    <input type="range" min="1" max="24" step="1" value="${months}"
-      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._sabbMonths=+this.value;renderSabbatical()">
-  </div>
-  <div style="margin-bottom:14px">
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-      <span>Monatliche Ausgaben im Sabbatical</span>
-      <strong id="sabb-burn-out" style="color:var(--tx);font-family:var(--fm)">${fmtCHF(monthlyBurn)}/Mt</strong>
-    </div>
-    <input type="range" min="2000" max="15000" step="100" value="${monthlyBurn}"
-      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._sabbBurn=+this.value;renderSabbatical()">
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Gesamtkosten</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--rd)">${fmtCHF(totalCost)}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Lebenshaltung + entgangene Sparrate</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Verzögerung</div>
-      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${delaY<=1?'var(--gr)':delaY<=3?'var(--am)':'var(--rd)'}">${delaY===0?'Kaum':delaY+' Jahr'+( delaY===1?'':'e')}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Verschiebung des FIRE-Datums</div>
+      <div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+          <span>Inflationsrate p.a.</span>
+          <strong id="sz-infl-out" style="font-family:var(--fm)">${infl}%</strong>
+        </div>
+        <input type="range" min="0.5" max="5" step="0.5" value="${infl}"
+          oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._inflation=+this.value;document.getElementById('sz-infl-out').textContent=this.value+'%';renderSzenarien()">
+      </div>
+      <div style="overflow-x:auto;border-radius:9px;border:1px solid var(--bdr)">
+        <table style="border-collapse:collapse;width:100%;min-width:280px;font-size:11px">
+          <thead>
+            <tr style="background:var(--bg3)">
+              <th style="text-align:left;padding:8px 12px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);font-family:var(--fb)">In X Jahren</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-family:var(--fb)">Ausgaben/Mt</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-family:var(--fb)">FIRE-Ziel</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="background:var(--bg3)">
+              <td style="padding:8px 12px;color:var(--tx2);font-size:10.5px;border-bottom:1px solid var(--bdr)">Heute</td>
+              <td style="text-align:right;padding:8px 10px;font-family:var(--fm);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(ausgJetzt)}</td>
+              <td style="text-align:right;padding:8px 10px;font-family:var(--fm);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(calc.fireZahlFreieAssets)}</td>
+            </tr>
+            ${rows.map((y,i)=>{
+              const real=ausgJetzt*Math.pow(1+infl/100,y);
+              const fireR=real*12/(fp.entnahmeRate/100);
+              const isFire=yrsN&&Math.abs(y-yrsN)<=2;
+              return `<tr style="background:${i%2===0?'var(--bg)':'var(--bg3)'}">
+                <td style="padding:8px 12px;color:var(--tx);font-size:10.5px;border-bottom:1px solid var(--bdr)">+${y} J.${isFire?` <span style="color:var(--bl);font-size:9px">≈ FIRE</span>`:''}</td>
+                <td style="text-align:right;padding:8px 10px;font-family:var(--fm);color:${isFire?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(real)}</td>
+                <td style="text-align:right;padding:8px 10px;font-family:var(--fm);color:${isFire?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(fireR)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:10px;color:var(--tx3);margin-top:7px;font-family:var(--fm)">
+        Bei ${infl}% Inflation am FIRE-Datum (+${yrsN} J.) kostet der gleiche Lebensstandard ${fmtC(ausgJetzt*Math.pow(1+infl/100,yrsN))}/Mt.
+      </div>
     </div>
   </div>`;
 }
 
-function renderInflation(){
-  const body=document.getElementById('inflation-body');
-  if(!body)return;
-  const fp=fireParams||getFireDefaults();
-  const fmtCHF=n=>fmtN(Math.round(n));
-  const inflation=fp._inflation||2.0;
 
-  const ausgJetzt=fp.ausgaben*12;
-  const r=fp.rendite/100/12;
-  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
-  let w=fp.freeAssets,mths=0;
-  while(w<fireZahlFreieAssets&&mths<1200){w=w*(1+r)+fp.sparrate;mths++}
-  const yrs=Math.ceil(mths/12);
-
-  // Reale Kaufkraft in X Jahren
-  const rows=[5,10,15,20,25,30].map(y=>{
-    const real=ausgJetzt/12*Math.pow(1+inflation/100,y);
-    const fireZahlInflation=real*12/(fp.entnahmeRate/100);
-    return {y, real, fireZahlInflation};
-  });
-
-  body.innerHTML=`
-  <div style="margin-bottom:14px">
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-      <span>Inflationsrate p.a.</span>
-      <strong id="infl-out" style="color:var(--tx);font-family:var(--fm)">${inflation}%</strong>
-    </div>
-    <input type="range" min="0.5" max="5" step="0.5" value="${inflation}"
-      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._inflation=+this.value;renderInflation()">
-  </div>
-  <div style="overflow-x:auto;border-radius:9px;border:1px solid var(--bdr)">
-    <table style="border-collapse:collapse;width:100%;min-width:300px;font-size:11px">
-      <thead>
-        <tr style="background:var(--bg3)">
-          <th style="text-align:left;padding:8px 12px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);font-size:10px">In X Jahren</th>
-          <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-size:10px">Ausgaben/Mt</th>
-          <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-size:10px">FIRE-Ziel</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr style="background:var(--bg3)">
-          <td style="padding:8px 12px;color:var(--tx2);font-size:10.5px;border-bottom:1px solid var(--bdr)">Heute (nominal)</td>
-          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(ausgJetzt/12)}</td>
-          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(fireZahlFreieAssets)}</td>
-        </tr>
-        ${rows.map((row,i)=>`<tr style="background:${i%2===0?'var(--bg)':'var(--bg3)'}">
-          <td style="padding:8px 12px;color:var(--tx);font-size:10.5px;border-bottom:1px solid var(--bdr)">+${row.y} Jahre${row.y===yrs?` <span style="color:var(--bl);font-size:9px">(FIRE-Datum)</span>`:''}</td>
-          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;color:${row.y>=yrs?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(row.real)}</td>
-          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;color:${row.y>=yrs?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(row.fireZahlInflation)}</td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-  </div>
-  <div style="font-size:10px;color:var(--tx3);margin-top:8px;font-family:var(--fm)">Bei ${inflation}% Inflation kostet der gleiche Lebensstandard in ${yrs} Jahren (FIRE-Datum) ${fmtCHF(ausgJetzt/12*Math.pow(1+inflation/100,yrs))}/Mt statt heute ${fmtCHF(ausgJetzt/12)}.</div>`;
-}
 
 
 function openApplyProjection(){
