@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='28.0.0';
+const APP_VERSION='29.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1236,6 +1236,12 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
           </div>
         </div>
       </div>
+      <!-- Projektion sub-tabs -->
+      <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
+        <button id="projtab-wachstum" class="bptab active" onclick="setProjTab('wachstum')">📈 Wachstum</button>
+        <button id="projtab-fire" class="bptab" onclick="setProjTab('fire')">🔥 FIRE</button>
+        <button id="projtab-szenarien" class="bptab" onclick="setProjTab('szenarien')">🎯 Szenarien</button>
+      </div>
       <div id="proj-body"></div>
     </div>
 
@@ -1362,6 +1368,8 @@ let targetAllocation={
 let currentPositionsTab='konten'; // 'konten' | 'positionen'
 // Projection params
 let projParams={rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
+let projTab='wachstum'; // 'wachstum' | 'fire' | 'szenarien'
+let fireParams=null; // lazy-initialized from current data
 // Renten params per person
 let renteParams={
   ich:{gebJahr:1990,rentenalter:65,lohn:120000,arbJahre:40,pk:150000,pkBeitrag:25000,pkRendite:3,s3:0},
@@ -4450,7 +4458,20 @@ function renderVerlauf(){
 }
 
 // ══ PROJEKTION (#2 two-phase savings, #6 compact controls) ══
+function setProjTab(tab){
+  projTab=tab;
+  document.querySelectorAll('[id^="projtab-"]').forEach(b=>b.classList.remove('active'));
+  document.getElementById('projtab-'+tab)?.classList.add('active');
+  renderProjektion();
+}
+
 function renderProjektion(){
+  if(projTab==='fire'){renderFireRechner();return}
+  if(projTab==='szenarien'){renderSzenarien();return}
+  renderProjWachstum();
+}
+
+function renderProjWachstum(){
   const body=document.getElementById('proj-body');
   const ms=validMonths(currentView);const lastM=ms.length?ms[ms.length-1]:null;const lastT=lastM?getT(lastM):{cash:0,anlagen:0,gesamt:0};
   const{rate,inflation,years,extraSavings,divYield,phase2start,phase2savings,ter,wht}=projParams;
@@ -6112,123 +6133,138 @@ function renderBpIst(){
   const cats=getBudgetCats();
   const now=new Date();
   if(!bpIstMonth)bpIstMonth=currentEntryMonth||`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-
-  // Build months of selected year
   const yearMonths=Array.from({length:12},(_,i)=>`${bpIstYear}-${String(i+1).padStart(2,'0')}`);
-  const monthNames=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+  const mn=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
 
-  // Year-level totals for summary KPIs — only months with ANY actual data
-  const recordedMonths=yearMonths.filter(m=>{
-    const d=actualBudget[m];
-    return d&&Object.values(d).some(v=>v>0);
-  });
+  // Recorded months (have at least one value > 0)
+  const recMs=yearMonths.filter(m=>{const d=actualBudget[m];return d&&Object.values(d).some(v=>v>0)});
   const planTotal=cats.reduce((s,c)=>s+c.plan,0);
-  const avgIstTotal=recordedMonths.length>0
-    ?recordedMonths.reduce((s,m)=>s+cats.reduce((cs,c)=>cs+(actualBudget[m]?.[c.id]||0),0),0)/recordedMonths.length
-    :null;
-  const deltaTotal=avgIstTotal!==null?avgIstTotal-planTotal:null;
+  const avgIst=recMs.length>0?recMs.reduce((s,m)=>s+cats.reduce((cs,c)=>cs+(actualBudget[m]?.[c.id]||0),0),0)/recMs.length:null;
+  const deltaAvg=avgIst!==null?avgIst-planTotal:null;
+
+  // Einkommen: sum from db for all persons
+  const getEinkommen=m=>{
+    const e=db[m]||{};
+    return (e.ich?.einkommen||0)+(e.partner?.einkommen||0);
+  };
 
   let h=`
-  <!-- Year selector + summary -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-    <div style="display:flex;align-items:center;gap:8px">
-      <button onclick="bpIstYear--;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 13px;color:var(--tx);cursor:pointer;font-size:16px;line-height:1">‹</button>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button onclick="bpIstYear--;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:4px 12px;color:var(--tx);cursor:pointer;font-size:17px;line-height:1">‹</button>
       <span style="font-size:15px;font-weight:600;color:var(--tx);min-width:44px;text-align:center">${bpIstYear}</span>
-      <button onclick="bpIstYear++;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 13px;color:var(--tx);cursor:pointer;font-size:16px;line-height:1">›</button>
+      <button onclick="bpIstYear++;renderBpIst()" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:4px 12px;color:var(--tx);cursor:pointer;font-size:17px;line-height:1">›</button>
     </div>
-    ${avgIstTotal!==null?`<div style="display:flex;gap:14px;font-family:var(--fm);font-size:11.5px">
-      <span style="color:var(--tx2)">Ø Ist <strong class="blur-val" style="color:var(--tx)">${fmtN(Math.round(avgIstTotal))}</strong></span>
-      <span style="color:var(--tx2)">Plan <strong class="blur-val" style="color:var(--tx2)">${fmtN(planTotal)}</strong></span>
-      <span style="color:${deltaTotal<=0?'var(--gr)':'var(--rd)'}"><strong>${deltaTotal>=0?'+':''}${fmt(Math.round(deltaTotal))}/Mt</strong></span>
-    </div>`:`<div style="font-size:11px;color:var(--tx3)">Noch keine Daten für ${bpIstYear}</div>`}
+    <div style="display:flex;gap:12px;font-family:var(--fm);font-size:11.5px;align-items:center;flex-wrap:wrap">
+      ${avgIst!==null?`
+        <span style="color:var(--tx2)">Ø Ist <strong class="blur-val" style="color:var(--tx)">${fmtN(Math.round(avgIst))}</strong></span>
+        <span style="color:var(--tx2)">Plan <strong style="color:var(--tx2)">${fmtN(planTotal)}</strong></span>
+        <span style="font-weight:600;color:${deltaAvg<=0?'var(--gr)':'var(--rd)'}">${deltaAvg>=0?'+':''}${fmtN(Math.round(deltaAvg))}/Mt</span>
+      `:`<span style="color:var(--tx3);font-size:11px">Noch keine Daten für ${bpIstYear}</span>`}
+      <button onclick="goTo('eingabe');setTimeout(()=>setEingabeTab('ausgaben'),80)" style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:4px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">+ Erfassen</button>
+    </div>
   </div>
 
-  <!-- Hint about entry -->
-  <div style="background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.18);border-radius:9px;padding:9px 13px;margin-bottom:14px;font-size:10.5px;color:var(--tx2);display:flex;align-items:center;gap:8px">
-    <span>💡</span>
-    <span>Ausgaben erfassen: <button onclick="goTo('eingabe');setTimeout(()=>setEingabeTab('ausgaben'),80)" style="background:none;border:none;color:var(--bl);cursor:pointer;font-size:10.5px;padding:0;font-family:var(--fb);text-decoration:underline">Eingabe → 🧾 Ausgaben</button></span>
-  </div>
-
-  <!-- Table -->
-  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr)">
-    <table style="border-collapse:collapse;width:100%;min-width:680px;font-size:11px">
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr);background:var(--bg)">
+    <table style="border-collapse:collapse;width:100%;min-width:700px">
       <thead>
         <tr style="background:var(--bg3)">
-          <th style="text-align:left;padding:10px 13px;color:var(--tx2);font-weight:500;position:sticky;left:0;background:var(--bg3);z-index:2;min-width:95px;font-family:var(--fb);border-bottom:1px solid var(--bdr2)">Kategorie</th>
+          <th style="text-align:left;padding:9px 13px;color:var(--tx3);font-size:10px;font-weight:500;position:sticky;left:0;background:var(--bg3);z-index:2;min-width:90px;font-family:var(--fb);border-bottom:2px solid var(--bdr2);text-transform:uppercase;letter-spacing:.03em">Kategorie</th>
           ${yearMonths.map((m,i)=>{
             const isCur=m===bpIstMonth;
-            const hasData=actualBudget[m]&&Object.keys(actualBudget[m]).length>0;
-            return `<th style="text-align:right;padding:10px 6px;font-weight:${isCur?'600':'400'};color:${isCur?'var(--tx)':hasData?'var(--tx2)':'var(--tx3)'};white-space:nowrap;min-width:44px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);font-family:var(--fb)">${monthNames[i]}</th>`;
+            const hasData=recMs.includes(m);
+            return `<th style="text-align:right;padding:9px 5px;font-size:${isCur?'11px':'10px'};font-weight:${isCur?'600':'400'};color:${isCur?'var(--bl)':hasData?'var(--tx2)':'var(--tx3)'};white-space:nowrap;min-width:40px;border-left:1px solid var(--bdr);border-bottom:2px solid var(--bdr2);font-family:var(--fb)">${mn[i]}</th>`;
           }).join('')}
-          <th style="text-align:right;padding:10px 9px;color:var(--tx);font-weight:600;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Ø Ist</th>
-          <th style="text-align:right;padding:10px 9px;color:var(--tx3);font-weight:400;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Plan</th>
-          <th style="text-align:right;padding:10px 9px;font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3)">Δ/Mt</th>
-          <th style="text-align:right;padding:10px 9px;font-weight:400;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);background:var(--bg3);color:var(--tx3)">Hoch./J</th>
+          <th style="text-align:right;padding:9px 8px;color:var(--tx2);font-size:10px;font-weight:600;border-left:2px solid var(--bdr2);border-bottom:2px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);text-transform:uppercase;letter-spacing:.03em">Ø Ist</th>
+          <th style="text-align:right;padding:9px 8px;color:var(--tx3);font-size:10px;font-weight:400;border-left:1px solid var(--bdr);border-bottom:2px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);text-transform:uppercase;letter-spacing:.03em">Plan</th>
+          <th style="text-align:right;padding:9px 8px;font-size:10px;font-weight:500;border-left:1px solid var(--bdr);border-bottom:2px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);text-transform:uppercase;letter-spacing:.03em;color:var(--tx2)">Δ/Mt</th>
+          <th style="text-align:right;padding:9px 8px;font-size:10px;font-weight:400;border-left:1px solid var(--bdr);border-bottom:2px solid var(--bdr2);white-space:nowrap;font-family:var(--fb);text-transform:uppercase;letter-spacing:.03em;color:var(--tx3)">Hochr./J</th>
         </tr>
       </thead>
       <tbody>
+        <!-- EINKOMMEN ZEILE (aus erfassten Konten-Daten) -->
+        ${(()=>{
+          const einkVals=yearMonths.map(m=>{const v=getEinkommen(m);return v>0?v:null});
+          const recE=einkVals.filter(v=>v!==null);
+          const avgE=recE.length>0?recE.reduce((s,v)=>s+v,0)/recE.length:null;
+          if(avgE===null&&recE.length===0)return '';
+          return `<tr style="background:rgba(96,165,250,0.05);border-bottom:2px solid var(--bdr2)">
+            <td style="padding:8px 13px;color:var(--bl);position:sticky;left:0;background:rgba(96,165,250,0.05);z-index:1;font-family:var(--fb);font-size:11px;font-weight:600">Einkommen</td>
+            ${yearMonths.map((m,mi)=>{
+              const v=einkVals[mi];
+              const isCur=m===bpIstMonth;
+              return `<td style="text-align:right;padding:8px 5px;font-family:var(--fm);font-size:11px;color:${v?'var(--bl)':'var(--bdr2)'};border-left:1px solid var(--bdr);${isCur?'background:rgba(96,165,250,0.08);':''}" class="blur-val">${v?fmtN(v):''}</td>`;
+            }).join('')}
+            <td style="text-align:right;padding:8px 8px;font-family:var(--fm);font-size:11px;font-weight:600;color:var(--bl);border-left:2px solid var(--bdr2)" class="blur-val">${avgE!==null?fmtN(Math.round(avgE)):'—'}</td>
+            <td style="border-left:1px solid var(--bdr)"></td>
+            <td style="border-left:1px solid var(--bdr)"></td>
+            <td style="border-left:1px solid var(--bdr)"></td>
+          </tr>`;
+        })()}
+        <!-- AUSGABEN KATEGORIEN -->
         ${cats.map((cat,ci)=>{
-          const monthVals=yearMonths.map(m=>{
-            const v=actualBudget[m]?.[cat.id];
-            return (v!==undefined&&v>0)?v:null;  // only count explicit entries > 0
-          });
-          const recorded=monthVals.filter(v=>v!==null&&v>0);
-          const avg=recorded.length>0?recorded.reduce((s,v)=>s+v,0)/recorded.length:null;
+          const monthVals=yearMonths.map(m=>{const v=actualBudget[m]?.[cat.id];return(v!==undefined&&v>0)?v:null});
+          const rec=monthVals.filter(v=>v!==null);
+          const avg=rec.length>0?rec.reduce((s,v)=>s+v,0)/rec.length:null;
           const delta=avg!==null?avg-cat.plan:null;
           const hochr=delta!==null?delta*12:null;
-          const deltaColor=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
+          const dc=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
           const rowBg=ci%2===0?'var(--bg)':'var(--bg3)';
           return `<tr style="background:${rowBg}">
-            <td style="padding:9px 13px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
+            <td style="padding:8px 13px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);font-size:11px;border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
             ${yearMonths.map((m,mi)=>{
               const v=monthVals[mi];
               const isCur=m===bpIstMonth;
-              const overPlan=v!==null&&v>cat.plan;
-              const cellBg=isCur?'rgba(96,165,250,0.07)':'';
-              const cellColor=v===null?'':overPlan?'var(--rd)':v>0?'var(--tx)':'var(--tx3)';
+              const over=v!==null&&v>cat.plan;
+              const cellBg=isCur?'rgba(96,165,250,0.06)':'';
+              const cellC=v===null?'':over?'var(--rd)':'var(--tx)';
               const hasNote=!!(actualBudgetNotes[m]?.[cat.id]);
               const noteTitle=hasNote?actualBudgetNotes[m][cat.id]:'';
-              return `<td style="text-align:right;padding:8px 6px;font-family:var(--fm);color:${cellColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${cellBg?'background:'+cellBg+';':''};position:relative" title="${escapeHTML(noteTitle)}">${v!==null&&v>0?`${fmt(v)}${hasNote?`<span style="position:absolute;top:4px;right:3px;font-size:6px;color:var(--am)">●</span>`:''}`:''}</td>`;
+              return `<td style="text-align:right;padding:8px 5px;font-family:var(--fm);font-size:11px;color:${cellC};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr);${cellBg?'background:'+cellBg+';':''};position:relative" title="${escapeHTML(noteTitle)}">${v?`${over?'<span style="font-size:8px">⚠</span> ':''}${fmtN(v)}${hasNote?'<span style="position:absolute;top:3px;right:2px;font-size:6px;color:var(--am)">●</span>':''}`:''}</td>`;
             }).join('')}
-            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtN(cat.plan)}</td>
-            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:${deltaColor};font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmtN(Math.round(delta)):'—'}</td>
-            <td style="text-align:right;padding:9px 9px;font-family:var(--fm);color:${deltaColor};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${hochr!==null?(hochr>=0?'+':'')+fmtN(Math.round(hochr)):'—'}</td>
+            <td style="text-align:right;padding:8px 8px;font-family:var(--fm);font-size:11px;color:var(--tx);font-weight:500;border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${avg!==null?fmtN(Math.round(avg)):'—'}</td>
+            <td style="text-align:right;padding:8px 8px;font-family:var(--fm);font-size:11px;color:var(--tx3);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtN(cat.plan)}</td>
+            <td style="text-align:right;padding:8px 8px;font-family:var(--fm);font-size:11px;color:${dc};font-weight:500;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmtN(Math.round(delta)):'—'}</td>
+            <td style="text-align:right;padding:8px 8px;font-family:var(--fm);font-size:11px;color:${dc};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${hochr!==null?(hochr>=0?'+':'')+fmtN(Math.round(hochr)):'—'}</td>
           </tr>`;
         }).join('')}
-        <!-- Total row -->
+        <!-- TOTAL ROW -->
         ${(()=>{
-          const totals=yearMonths.map((m,mi)=>{
-            const hasAny=cats.some(c=>actualBudget[m]?.[c.id]>0);
-            if(!hasAny)return null;
-            return cats.reduce((s,c)=>s+(actualBudget[m]?.[c.id]||0),0);
+          const tots=yearMonths.map(m=>{
+            const has=cats.some(c=>actualBudget[m]?.[c.id]>0);
+            return has?cats.reduce((s,c)=>s+(actualBudget[m]?.[c.id]||0),0):null;
           });
-          const recTotals=totals.filter(v=>v!==null&&v>0);
-          const avg=recTotals.length>0?recTotals.reduce((s,v)=>s+v,0)/recTotals.length:null;
+          const rec=tots.filter(v=>v!==null);
+          const avg=rec.length>0?rec.reduce((s,v)=>s+v,0)/rec.length:null;
           const planT=cats.reduce((s,c)=>s+c.plan,0);
           const delta=avg!==null?avg-planT:null;
           const dc=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
-          return `<tr style="background:var(--bg3);border-top:2px solid var(--bdr2)">
-            <td style="padding:10px 13px;color:var(--tx);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600">Total</td>
+          return `<tr style="background:var(--bg3)">
+            <td style="padding:10px 13px;color:var(--tx);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11.5px;border-top:2px solid var(--bdr2)">Total Ausgaben</td>
             ${yearMonths.map((m,mi)=>{
-              const v=totals[mi];
+              const v=tots[mi];
               const isCur=m===bpIstMonth;
-              return `<td style="text-align:right;padding:10px 6px;font-family:var(--fm);font-weight:500;color:${v!==null?'var(--tx)':'var(--bdr2)'};border-left:1px solid var(--bdr);${isCur?'background:rgba(96,165,250,0.07);':''}" class="blur-val">${v!==null?fmt(v):'—'}</td>`;
+              // Sparquote hint
+              const eink=getEinkommen(m);
+              const ueb=v!==null&&eink>0?eink-v:null;
+              const title=ueb!==null?`Überschuss: ${ueb>=0?'+':''}${fmtN(ueb)}`:'';
+              return `<td style="text-align:right;padding:10px 5px;font-family:var(--fm);font-size:11px;font-weight:500;color:${v!==null?'var(--tx)':'var(--bdr2)'};border-left:1px solid var(--bdr);border-top:2px solid var(--bdr2);${isCur?'background:rgba(96,165,250,0.08);':''}" class="blur-val" title="${title}">${v!==null?fmtN(v):''}</td>`;
             }).join('')}
-            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);font-weight:600;color:var(--tx);border-left:2px solid var(--bdr2)" class="blur-val">${avg!==null?fmt(Math.round(avg)):'—'}</td>
-            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);color:var(--tx3);border-left:1px solid var(--bdr)" class="blur-val">${fmtN(planT)}</td>
-            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);font-weight:600;color:${dc};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmtN(Math.round(delta)):'—'}</td>
-            <td style="text-align:right;padding:10px 9px;font-family:var(--fm);color:${dc};border-left:1px solid var(--bdr)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmtN(Math.round(delta*12)):'—'}</td>
+            <td style="text-align:right;padding:10px 8px;font-family:var(--fm);font-size:11.5px;font-weight:600;color:var(--tx);border-left:2px solid var(--bdr2);border-top:2px solid var(--bdr2)" class="blur-val">${avg!==null?fmtN(Math.round(avg)):'—'}</td>
+            <td style="text-align:right;padding:10px 8px;font-family:var(--fm);font-size:11px;color:var(--tx3);border-left:1px solid var(--bdr);border-top:2px solid var(--bdr2)" class="blur-val">${fmtN(planT)}</td>
+            <td style="text-align:right;padding:10px 8px;font-family:var(--fm);font-size:11.5px;font-weight:600;color:${dc};border-left:1px solid var(--bdr);border-top:2px solid var(--bdr2)" class="blur-val">${delta!==null?(delta>=0?'+':'')+fmtN(Math.round(delta)):'—'}</td>
+            <td style="text-align:right;padding:10px 8px;font-family:var(--fm);font-size:11px;color:${dc};border-left:1px solid var(--bdr);border-top:2px solid var(--bdr2)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmtN(Math.round(delta*12)):'—'}</td>
           </tr>`;
         })()}
       </tbody>
     </table>
   </div>
-  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:10px;color:var(--tx3);font-family:var(--fm)">
-    <span>Aktueller Monat <span style="background:rgba(96,165,250,0.15);border-radius:3px;padding:1px 5px">blau</span></span>
-    <span style="color:var(--rd)">Rot = über Plan</span>
-    <span style="color:var(--am)">● = Kommentar vorhanden</span>
-    <span>Ø aus erfassten Monaten · Hochr. = Δ × 12</span>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:10px;color:var(--tx3);font-family:var(--fm)">
+    <span style="color:var(--bl)">■ Einkommen aus Konten-Daten</span>
+    <span>Aktueller Monat blau</span>
+    <span style="color:var(--rd)">⚠ Rot = über Plan</span>
+    <span style="color:var(--am)">● = Kommentar</span>
+    <span>Hover auf Total → Überschuss</span>
   </div>`;
 
   body.innerHTML=h;
@@ -6343,11 +6379,494 @@ function renderBpVerlauf(){
     </div>`;
   });
 
+
   body.innerHTML=h;
 }
 
+// ══ FIRE-RECHNER ══
 
-let applyOption='phase1';
+function getFireDefaults(){
+  // Pull data from current vault state
+  const ms=validMonths(currentView);
+  const lastM=ms.length?ms[ms.length-1]:null;
+  const lastT=lastM?getT(lastM,currentView):{gesamt:0,cash:0,anlagen:0};
+
+  // Free assets = gesamt minus PK and 3a (bfsExcluded cats)
+  const bfsExcIds=getCats().filter(c=>c.bfsExcluded).flatMap(c=>c.items.map(i=>i.id));
+  let freeAssets=0, pkAnd3a=0;
+  if(lastM){
+    ['ich','partner','kinder'].forEach(p=>{
+      const e=db[lastM]?.[p]||{};
+      Object.keys(e).forEach(k=>{
+        if(typeof e[k]!=='number'||k==='einkommen'||k==='investiert')return;
+        if(bfsExcIds.includes(k))pkAnd3a+=e[k];
+        else freeAssets+=e[k];
+      });
+    });
+  }
+
+  // PK separately (Säule 2)
+  const pkVal=pkAnd3a; // includes both PK and 3a
+
+  // Monthly savings from budget
+  const hh=calcHousehold();
+  const bt=budgetTotals();
+  const kita=calcKitaKosten();
+  const kitaExtra=bt.total>0&&!getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita'&&budgetItemAmt(i)>0)?kita.monat:0;
+  const ausgaben=bt.total+kitaExtra;
+  const ueberschuss=Math.max(0,hh.nettoMonat-ausgaben);
+
+  // Birth years → current ages
+  const now=new Date();
+  const age1=settings.birthYear1?now.getFullYear()-settings.birthYear1:38;
+  const age2=settings.birthYear2?now.getFullYear()-settings.birthYear2:38;
+  const avgAge=Math.round((age1+age2)/2);
+
+  // AHV at 65: rough estimate CHF 2'100/Mt per person (max CHF 2'520, typical ~1'800-2'200)
+  const ahvPerPerson=2100;
+
+  return {
+    freeAssets:Math.round(freeAssets),
+    pkAnd3a:Math.round(pkAnd3a),
+    totalWealth:Math.round(lastT.gesamt),
+    sparrate:Math.round(ueberschuss),
+    ausgaben:Math.round(ausgaben>0?ausgaben:8500),
+    rendite:parseFloat(projParams.rate)||6,
+    entnahmeRate:4.0,
+    age1, age2, avgAge,
+    penAge1:renteParams?.ich?.rentenalter||65,
+    penAge2:renteParams?.partner?.rentenalter||65,
+    ahvJahr:(ahvPerPerson*2)*12, // combined AHV CHF/year
+    ahvNichtErwerb:4000, // rough AHV contribution as non-employed per year
+    zugangAlter:60 // PK+3a accessible from ~60
+  };
+}
+
+function renderFireRechner(){
+  const body=document.getElementById('proj-body');
+  if(!body)return;
+
+  // Initialize or reset to defaults
+  if(!fireParams)fireParams={...getFireDefaults()};
+  const fp=fireParams;
+  const def=getFireDefaults();
+
+  // === RECHNER 1: FIRE-STATUS ===
+
+  // 4%-Regel FIRE-Zahl basierend auf Ausgaben
+  // CH-Anpassung: nach 65 reduziert AHV die benötigte Entnahme
+  const ausgabenJahr=fp.ausgaben*12;
+  const ahvEntlastungJahr=fp.ahvJahr; // ab 65
+  const ausgabenVorAHV=ausgabenJahr;
+  const ausgabenNachAHV=Math.max(0,ausgabenJahr-ahvEntlastungJahr);
+
+  // FIRE-Zahl: wir rechnen mit gewichteter Formel
+  // Phase 1 (jetzt bis 60): nur freie Assets, + AHV-Beiträge als Nicht-Erwerbstätige
+  // Phase 2 (60-65): + PK & 3a zugänglich
+  // Phase 3 (ab 65): + AHV, deutlich weniger Entnahme nötig
+  // Vereinfachung: FIRE-Zahl basiert auf Ausgaben vor AHV, AHV ab 65 reduziert Entnahme
+  const fireZahlTotal=ausgabenJahr/(fp.entnahmeRate/100);
+
+  // Freie Assets FIRE: Ausgaben × 25, aber ab 60 kommen PK+3a dazu → braucht weniger
+  // Vereinfachte Formel: freie Assets müssen Phase 1 (jetzt bis 60) abdecken
+  // Plus Rest wird durch PK+3a+AHV gedeckt
+  const jahreBis60=Math.max(0, fp.zugangAlter - fp.avgAge);
+  const pkAnd3aZukünftig=fp.pkAnd3a*(1+fp.rendite/100)**jahreBis60; // Wachstum bis 60
+  const fireZahlFreieAssets=Math.max(0, fireZahlTotal - pkAnd3aZukünftig*0.7); // 70% der PK+3a als konservative Anrechnung
+
+  // Timeline: wie lange bis freie Assets die FIRE-Zahl erreichen?
+  const r=fp.rendite/100/12;
+  let wealth=fp.freeAssets, months=0;
+  const target=fireZahlFreieAssets;
+  while(wealth<target && months<1200){
+    wealth=wealth*(1+r)+fp.sparrate;
+    months++;
+  }
+  const yrsToFire=Math.ceil(months/12);
+  const fireYear=new Date().getFullYear()+yrsToFire;
+  const fireAge1=fp.age1+yrsToFire;
+  const fireAge2=fp.age2+yrsToFire;
+
+  // Coast FIRE: braucht freie Assets heute das Ziel bis 60 zu erreichen?
+  const coastTarget=fireZahlFreieAssets/Math.pow(1+fp.rendite/100, Math.max(1,yrsToFire));
+  const isCoast=fp.freeAssets>=coastTarget;
+
+  // Entnahme bei aktuellem Vermögen
+  const entnahmeJetzt=fp.freeAssets*fp.entnahmeRate/100/12;
+
+  // Pensum-Simulation Defaults
+  const p1Def=settings?.birthYear1?Math.round(income?.p1?.pensum||80):80;
+  const p2Def=settings?.birthYear2?Math.round(income?.p2?.pensum||80):80;
+
+  const fmtCHF=n=>fmtN(Math.round(n));
+  const pct=Math.min(100,fp.freeAssets/Math.max(1,fireZahlFreieAssets)*100);
+
+  let h=`
+  <!-- Reset Button -->
+  <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+    <button onclick="fireParams=null;renderFireRechner()" style="display:flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:6px 12px;font-size:11px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Auf aktuelle Daten zurücksetzen</button>
+  </div>
+
+  <!-- RECHNER 1: FIRE-STATUS -->
+  <div class="widget" style="margin-bottom:14px">
+    <div class="widget-hd">
+      <div>
+        <div class="widget-title">🔥 FIRE-Status</div>
+        <div class="widget-title-sub">Wann seid ihr finanziell unabhängig? · Schweizer 3-Phasen-Modell</div>
+      </div>
+    </div>
+    <div class="widget-body">
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Ziel (Freie Assets)</div>
+          <div class="blur-val" style="font-family:var(--fm);font-size:16px;font-weight:500;color:var(--tx);letter-spacing:-.3px">${fmtCHF(fireZahlFreieAssets)}</div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Gesamt-FIRE: ${fmtCHF(fireZahlTotal)}</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Freie Assets heute</div>
+          <div class="blur-val" style="font-family:var(--fm);font-size:16px;font-weight:500;color:var(--tx);letter-spacing:-.3px">${fmtCHF(fp.freeAssets)}</div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">+ PK/3a: ${fmtCHF(fp.pkAnd3a)} (ab ~60)</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
+          <div style="font-family:var(--fm);font-size:16px;font-weight:500;color:${months>=1200?'var(--rd)':'var(--gr)'};letter-spacing:-.3px">${months>=1200?'> 100 J.':fireYear}</div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">In ${yrsToFire} J. · ${n1()} ${fireAge1}J. · ${n2()} ${fireAge2}J.</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:10px;padding:12px 14px">
+          <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Coast FIRE</div>
+          <div style="font-family:var(--fm);font-size:16px;font-weight:500;color:${isCoast?'var(--gr)':'var(--am)'};letter-spacing:-.3px">${isCoast?'✓ Erreicht':'Noch nicht'}</div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${isCoast?'Ohne Sparen ans Ziel':'Fehlt '+fmtCHF(coastTarget-fp.freeAssets)}</div>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);margin-bottom:5px;font-family:var(--fm)">
+          <span>Freie Assets ${fmtCHF(fp.freeAssets)}</span>
+          <span style="color:${pct>=100?'var(--gr)':'var(--tx3)'}"><strong>${pct.toFixed(1)}%</strong> erreicht</span>
+          <span>Ziel ${fmtCHF(fireZahlFreieAssets)}</span>
+        </div>
+        <div style="height:10px;background:var(--bg3);border-radius:5px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${pct>=100?'var(--gr)':pct>=60?'var(--am)':'var(--bl)'};border-radius:5px;transition:width .3s"></div>
+        </div>
+      </div>
+
+      <!-- 3-Phasen Erklärung CH -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+        <div style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.2);border-radius:9px;padding:10px 11px">
+          <div style="font-size:9.5px;font-weight:500;color:var(--rd);margin-bottom:4px">Phase 1 · Heute–60</div>
+          <div style="font-size:10px;color:var(--tx2);line-height:1.5">Nur freie Assets<br>+ AHV-Beiträge als Nicht-Erwerbstätige<br><strong style="font-family:var(--fm)">~CHF ${fmtCHF(fp.ahvNichtErwerb)}/J</strong></div>
+        </div>
+        <div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:9px;padding:10px 11px">
+          <div style="font-size:9.5px;font-weight:500;color:var(--am);margin-bottom:4px">Phase 2 · 60–65</div>
+          <div style="font-size:10px;color:var(--tx2);line-height:1.5">+ PK & Säule 3a<br>zugänglich (gestaffelt!)<br><strong style="font-family:var(--fm)">~CHF ${fmtCHF(fp.pkAnd3a)}</strong></div>
+        </div>
+        <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:9px;padding:10px 11px">
+          <div style="font-size:9.5px;font-weight:500;color:var(--gr);margin-bottom:4px">Phase 3 · Ab 65</div>
+          <div style="font-size:10px;color:var(--tx2);line-height:1.5">+ AHV-Rente<br>~CHF ${fmtCHF(fp.ahvJahr/12)}/Mt<br>Entnahme sinkt</div>
+        </div>
+      </div>
+
+      <!-- Entnahme-Tabelle -->
+      <div style="font-size:10.5px;font-weight:500;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Entnahme heute (Freie Assets)</div>
+      <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px">
+        ${[3,3.5,4,4.5].map(rate=>{
+          const m=fp.freeAssets*rate/100/12;
+          const isBase=rate===4;
+          return `<div style="display:flex;align-items:center;gap:10px;padding:8px 11px;background:${isBase?'rgba(74,222,128,0.08)':'var(--bg3)'};border-radius:7px;${isBase?'border:1px solid rgba(74,222,128,0.2)':''}">
+            <div style="flex:1;font-size:11px;color:var(--tx)">${rate}% Entnahmerate${isBase?' (Standard 4%-Regel)':''}</div>
+            <div class="blur-val" style="font-family:var(--fm);font-size:12px;font-weight:${isBase?'600':'400'};color:${isBase?'var(--gr)':'var(--tx)'}">${fmtCHF(m)}/Mt</div>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <!-- Slider controls -->
+      <div style="padding-top:12px;border-top:1px solid var(--bdr)">
+        <div style="font-size:10.5px;font-weight:500;color:var(--tx2);margin-bottom:12px;text-transform:uppercase;letter-spacing:.04em">Parameter anpassen</div>
+        ${[
+          {label:'Monatliche Ausgaben',id:'fp-ausgaben',min:3000,max:20000,step:100,val:fp.ausgaben,fmt:v=>fmtCHF(v)+'/Mt',update:`fireParams.ausgaben=+this.value`},
+          {label:'Monatliche Sparrate',id:'fp-sparrate',min:0,max:10000,step:100,val:fp.sparrate,fmt:v=>fmtCHF(v)+'/Mt',update:`fireParams.sparrate=+this.value`},
+          {label:'Rendite p.a.',id:'fp-rendite',min:2,max:12,step:0.5,val:fp.rendite,fmt:v=>v+'%',update:`fireParams.rendite=+this.value`},
+          {label:'Entnahmerate',id:'fp-entnahme',min:2,max:6,step:0.1,val:fp.entnahmeRate,fmt:v=>v+'%',update:`fireParams.entnahmeRate=+this.value`},
+        ].map(s=>`<div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+            <span>${s.label}</span>
+            <strong id="${s.id}-out" style="color:var(--tx);font-family:var(--fm)">${s.fmt(s.val)}</strong>
+          </div>
+          <input type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.val}"
+            oninput="${s.update};renderFireRechner()">
+        </div>`).join('')}
+      </div>
+
+      <!-- AHV Hinweis -->
+      <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+        ⚠ <strong>CH-Achtung:</strong> Als Nicht-Erwerbstätige müsst ihr bis 65 AHV-Beiträge zahlen (~CHF ${fmtCHF(fp.ahvNichtErwerb)}/Jahr, je nach Vermögen mehr). Empfehlung: <strong>Barista FIRE</strong> — einer arbeitet minimal (CHF 10k+/Jahr) → AHV und PK bleiben aktiv, Beiträge fallen weg.
+      </div>
+    </div>
+  </div>
+
+  <!-- RECHNER 2: PENSUM-SIMULATION -->
+  <div class="widget" style="margin-bottom:14px">
+    <div class="widget-hd">
+      <div>
+        <div class="widget-title">👥 Pensum-Simulation</div>
+        <div class="widget-title-sub">Was wenn ihr weniger arbeitet?</div>
+      </div>
+    </div>
+    <div class="widget-body">
+      <div id="fire-pensum-body"><!-- rendered by renderPensumSim() --></div>
+    </div>
+  </div>`;
+
+  body.innerHTML=h;
+
+  // Render pensum sim after DOM is ready
+  renderPensumSim();
+}
+
+function renderPensumSim(){
+  const body=document.getElementById('fire-pensum-body');
+  if(!body)return;
+  const fp=fireParams||getFireDefaults();
+
+  const p1=fp._simP1||Math.round(income?.p1?.pensum||80);
+  const p2=fp._simP2||Math.round(income?.p2?.pensum||80);
+  const p1Base=Math.round(income?.p1?.pensum||80);
+  const p2Base=Math.round(income?.p2?.pensum||80);
+
+  // Netto-Berechnung bei geändertem Pensum (Lohn skaliert linear)
+  const hh=calcHousehold();
+  const netto1Base=hh.n1Net||0;
+  const netto2Base=hh.n2Net||0;
+  const netto1Sim=p1Base>0?netto1Base*(p1/p1Base):0;
+  const netto2Sim=p2Base>0?netto2Base*(p2/p2Base):0;
+  const nettoSim=netto1Sim+netto2Sim;
+
+  const bt=budgetTotals();
+  const kita=calcKitaKosten();
+  const kitaExtra=bt.total>0&&!getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita'&&budgetItemAmt(i)>0)?kita.monat:0;
+  const ausgaben=bt.total+kitaExtra;
+  const uebSim=nettoSim-ausgaben;
+  const spSim=Math.max(0,uebSim);
+
+  // FIRE timeline mit neuer Sparrate
+  const r=fp.rendite/100/12;
+  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
+  let w=fp.freeAssets, mths=0;
+  while(w<fireZahlFreieAssets&&mths<1200){w=w*(1+r)+spSim;mths++}
+  const yrs=Math.ceil(mths/12);
+
+  const fmtCHF=n=>fmtN(Math.round(n));
+
+  body.innerHTML=`
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+    <div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+        <span>${n1()}</span>
+        <strong id="sim-p1-out" style="color:var(--tx);font-family:var(--fm)">${p1}%</strong>
+      </div>
+      <input type="range" min="0" max="100" step="10" value="${p1}"
+        oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=+this.value;renderPensumSim()">
+      <div style="font-size:10px;color:var(--tx3);margin-top:4px;font-family:var(--fm)">Netto ~${fmtCHF(netto1Sim)}/Mt</div>
+    </div>
+    <div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+        <span>${n2()}</span>
+        <strong id="sim-p2-out" style="color:var(--tx);font-family:var(--fm)">${p2}%</strong>
+      </div>
+      <input type="range" min="0" max="100" step="10" value="${p2}"
+        oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP2=+this.value;renderPensumSim()">
+      <div style="font-size:10px;color:var(--tx3);margin-top:4px;font-family:var(--fm)">Netto ~${fmtCHF(netto2Sim)}/Mt</div>
+    </div>
+  </div>
+
+  <!-- Quick buttons -->
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+    ${[
+      {label:`${n1()} hört auf`,p1:0,p2:p2Base},
+      {label:`${n2()} hört auf`,p1:p1Base,p2:0},
+      {label:'Beide 50%',p1:50,p2:50},
+      {label:'Beide 60%',p1:60,p2:60},
+      {label:'Reset',p1:p1Base,p2:p2Base},
+    ].map(b=>`<button onclick="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=${b.p1};fireParams._simP2=${b.p2};renderPensumSim()"
+      style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">${b.label}</button>`).join('')}
+  </div>
+
+  <!-- Result -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Haushalt-Netto</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtCHF(nettoSim)}/Mt</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Überschuss/Defizit</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${uebSim>=0?'var(--gr)':'var(--rd)'}">${uebSim>=0?'+':''}${fmtCHF(uebSim)}/Mt</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
+      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${mths>=1200?'var(--rd)':'var(--gr)'}">${mths>=1200?'> 100 J.':new Date().getFullYear()+yrs}</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">In Jahren</div>
+      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${mths>=1200?'—':yrs+' J.'}</div>
+    </div>
+  </div>
+  ${uebSim<0?`<div style="margin-top:10px;padding:9px 12px;background:rgba(248,113,113,0.1);border-radius:8px;font-size:10.5px;color:var(--tx2)">
+    ⚠ Bei diesem Pensum entsteht ein monatliches Defizit von ${fmtCHF(-uebSim)}. Das Vermögen wird abgebaut statt aufgebaut.
+  </div>`:''}
+  ${(p1===0||p2===0)?`<div style="margin-top:10px;padding:9px 12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:8px;font-size:10.5px;color:var(--tx2);line-height:1.55">
+    ⚠ <strong>CH-Hinweis:</strong> Wer komplett aufhört verliert PK-Beiträge und muss AHV als Nicht-Erwerbstätiger zahlen. <strong>Barista FIRE</strong> (min. CHF 10k Einkommen) ist steuerlich und vorsorgetechnisch deutlich vorteilhafter.
+  </div>`:''}`;
+}
+
+// ══ SZENARIEN ══
+function renderSzenarien(){
+  const body=document.getElementById('proj-body');
+  if(!body)return;
+  const fp=fireParams||getFireDefaults();
+  const fmtCHF=n=>fmtN(Math.round(n));
+
+  // Sabbatical Rechner
+  let h=`
+  <!-- SABBATICAL -->
+  <div class="widget" style="margin-bottom:14px">
+    <div class="widget-hd">
+      <div><div class="widget-title">🌴 Sabbatical-Rechner</div>
+      <div class="widget-title-sub">Was kostet eine Auszeit das FIRE-Ziel?</div></div>
+    </div>
+    <div class="widget-body">
+      <div id="sabbatical-body"></div>
+    </div>
+  </div>
+
+  <!-- INFLATIONS-CHECK -->
+  <div class="widget" style="margin-bottom:14px">
+    <div class="widget-hd">
+      <div><div class="widget-title">📊 Inflations-Check</div>
+      <div class="widget-title-sub">Was bedeutet Inflation für eure FIRE-Zahl?</div></div>
+    </div>
+    <div class="widget-body" id="inflation-body"></div>
+  </div>`;
+
+  body.innerHTML=h;
+  renderSabbatical();
+  renderInflation();
+}
+
+function renderSabbatical(){
+  const body=document.getElementById('sabbatical-body');
+  if(!body)return;
+  const fp=fireParams||getFireDefaults();
+  const fmtCHF=n=>fmtN(Math.round(n));
+
+  const months=fp._sabbMonths||6;
+  const monthlyBurn=fp._sabbBurn||fp.ausgaben;
+
+  // Cost: lost savings + spent capital
+  const lostSavings=fp.sparrate*months;
+  const capitalSpent=monthlyBurn*months;
+  const totalCost=lostSavings+capitalSpent;
+
+  // FIRE delay: how many months later?
+  const r=fp.rendite/100/12;
+  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
+  let wNormal=fp.freeAssets, mNormal=0;
+  while(wNormal<fireZahlFreieAssets&&mNormal<1200){wNormal=wNormal*(1+r)+fp.sparrate;mNormal++}
+  // After sabbatical: wealth reduced, then restart savings
+  let wSabb=fp.freeAssets-capitalSpent, mSabb=0;
+  while(wSabb<fireZahlFreieAssets&&mSabb<1200){wSabb=wSabb*(1+r)+fp.sparrate;mSabb++}
+  const delaY=Math.max(0,Math.ceil((mSabb+months-mNormal)/12));
+
+  body.innerHTML=`
+  <div style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+      <span>Dauer (Monate)</span>
+      <strong id="sabb-months-out" style="color:var(--tx);font-family:var(--fm)">${months}</strong>
+    </div>
+    <input type="range" min="1" max="24" step="1" value="${months}"
+      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._sabbMonths=+this.value;renderSabbatical()">
+  </div>
+  <div style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+      <span>Monatliche Ausgaben im Sabbatical</span>
+      <strong id="sabb-burn-out" style="color:var(--tx);font-family:var(--fm)">${fmtCHF(monthlyBurn)}/Mt</strong>
+    </div>
+    <input type="range" min="2000" max="15000" step="100" value="${monthlyBurn}"
+      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._sabbBurn=+this.value;renderSabbatical()">
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Gesamtkosten</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--rd)">${fmtCHF(totalCost)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Lebenshaltung + entgangene Sparrate</div>
+    </div>
+    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+      <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Verzögerung</div>
+      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${delaY<=1?'var(--gr)':delaY<=3?'var(--am)':'var(--rd)'}">${delaY===0?'Kaum':delaY+' Jahr'+( delaY===1?'':'e')}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Verschiebung des FIRE-Datums</div>
+    </div>
+  </div>`;
+}
+
+function renderInflation(){
+  const body=document.getElementById('inflation-body');
+  if(!body)return;
+  const fp=fireParams||getFireDefaults();
+  const fmtCHF=n=>fmtN(Math.round(n));
+  const inflation=fp._inflation||2.0;
+
+  const ausgJetzt=fp.ausgaben*12;
+  const r=fp.rendite/100/12;
+  const fireZahlFreieAssets=Math.max(0,(fp.ausgaben*12)/(fp.entnahmeRate/100)-(fp.pkAnd3a*Math.pow(1+fp.rendite/100,Math.max(0,fp.zugangAlter-fp.avgAge))*0.7));
+  let w=fp.freeAssets,mths=0;
+  while(w<fireZahlFreieAssets&&mths<1200){w=w*(1+r)+fp.sparrate;mths++}
+  const yrs=Math.ceil(mths/12);
+
+  // Reale Kaufkraft in X Jahren
+  const rows=[5,10,15,20,25,30].map(y=>{
+    const real=ausgJetzt/12*Math.pow(1+inflation/100,y);
+    const fireZahlInflation=real*12/(fp.entnahmeRate/100);
+    return {y, real, fireZahlInflation};
+  });
+
+  body.innerHTML=`
+  <div style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
+      <span>Inflationsrate p.a.</span>
+      <strong id="infl-out" style="color:var(--tx);font-family:var(--fm)">${inflation}%</strong>
+    </div>
+    <input type="range" min="0.5" max="5" step="0.5" value="${inflation}"
+      oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._inflation=+this.value;renderInflation()">
+  </div>
+  <div style="overflow-x:auto;border-radius:9px;border:1px solid var(--bdr)">
+    <table style="border-collapse:collapse;width:100%;min-width:300px;font-size:11px">
+      <thead>
+        <tr style="background:var(--bg3)">
+          <th style="text-align:left;padding:8px 12px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);font-size:10px">In X Jahren</th>
+          <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-size:10px">Ausgaben/Mt</th>
+          <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-weight:500;font-family:var(--fb);border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-size:10px">FIRE-Ziel</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="background:var(--bg3)">
+          <td style="padding:8px 12px;color:var(--tx2);font-size:10.5px;border-bottom:1px solid var(--bdr)">Heute (nominal)</td>
+          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(ausgJetzt/12)}</td>
+          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(fireZahlFreieAssets)}</td>
+        </tr>
+        ${rows.map((row,i)=>`<tr style="background:${i%2===0?'var(--bg)':'var(--bg3)'}">
+          <td style="padding:8px 12px;color:var(--tx);font-size:10.5px;border-bottom:1px solid var(--bdr)">+${row.y} Jahre${row.y===yrs?` <span style="color:var(--bl);font-size:9px">(FIRE-Datum)</span>`:''}</td>
+          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;color:${row.y>=yrs?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(row.real)}</td>
+          <td style="text-align:right;padding:8px 10px;font-family:var(--fm);font-size:11px;color:${row.y>=yrs?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtCHF(row.fireZahlInflation)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>
+  <div style="font-size:10px;color:var(--tx3);margin-top:8px;font-family:var(--fm)">Bei ${inflation}% Inflation kostet der gleiche Lebensstandard in ${yrs} Jahren (FIRE-Datum) ${fmtCHF(ausgJetzt/12*Math.pow(1+inflation/100,yrs))}/Mt statt heute ${fmtCHF(ausgJetzt/12)}.</div>`;
+}
+
+
 function openApplyProjection(){
   const hh=calcHousehold();
   const bt=budgetTotals();
