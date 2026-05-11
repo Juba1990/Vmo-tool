@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='35.0.0';
+const APP_VERSION='36.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -4714,113 +4714,219 @@ function updatePhaseLabels(){
   const b=document.getElementById('p2start-lbl');if(b)b.textContent=p;
 }
 
+
 function calcAndRenderProj(lastT){
   const{rate,inflation,years,extraSavings,divYield,phase2start,phase2savings,ter,wht}=projParams;
-  // Effective rate = gross rate - TER (fund cost)
-  // Dividend part loses WHT (non-recoverable portion for foreign ETFs ~15%)
   const terPct=(ter||0)/100;
   const whtPct=(wht||0)/100;
   const dv=divYield/100;
-  const capGains=Math.max(0,rate/100-dv); // rate = capital gains + dividends
-  // Net rate after TER and dividend withholding
-  const rNet=(capGains + dv*(1-whtPct)) - terPct;
-  const r=rNet;
+  const capGains=Math.max(0,rate/100-dv);
+  const rNet=(capGains+dv*(1-whtPct))-terPct; // net after TER & WHT
   const rGross=rate/100;
   const inf=inflation/100;
-  const realR=((1+r)/(1+inf))-1;
-  const startAnl=lastT.anlagen,startCash=lastT.cash;
-  const nomArr=[startAnl],realArr=[startAnl],savArr=[startAnl],divArr=[startAnl*dv*(1-whtPct)];
-  const grossArr=[startAnl];
+  const realR=((1+rNet)/(1+inf))-1;
+  const startAnl=lastT.anlagen+(lastT.s3aTotal||0); // include 3a in "invested" for projection
+  const startCash=lastT.cash;
+  const startTotal=lastT.gesamt; // gesamt = freeAssets incl. 3a, excl. PK
+
+  // ── Year-by-year simulation ──
+  const rows=[]; // for yearly table
   let nom=startAnl,real=startAnl,withSav=startAnl,gross=startAnl;
+  const nomArr=[startAnl],realArr=[startAnl],savArr=[startAnl],grossArr=[startAnl];
+  const divArr=[Math.round(startAnl*dv*(1-whtPct))];
+
   for(let y=1;y<=years;y++){
     const sav=y<=phase2start?extraSavings:phase2savings;
-    nom=nom*(1+r);
+    const nomPrev=nom,savPrev=withSav;
+    nom=nom*(1+rNet);
     real=real*(1+realR);
-    withSav=withSav*(1+r)+sav;
-    gross=gross*(1+rGross)+sav; // for comparison
+    withSav=withSav*(1+rNet)+sav;
+    gross=gross*(1+rGross)+sav;
+    const renditeErtrag=Math.round(nomPrev*rNet);
+    const savErtrag=Math.round(savPrev*rNet);
+    const divErtrag=Math.round(withSav*dv*(1-whtPct));
+    rows.push({y,
+      nom:Math.round(nom+startCash),
+      withSav:Math.round(withSav+startCash),
+      real:Math.round(real+startCash),
+      nomAnl:Math.round(nom),
+      rendite:renditeErtrag,
+      savAdd:sav,
+      savRendite:savErtrag,
+      div:divErtrag,
+    });
     nomArr.push(Math.round(nom));
     realArr.push(Math.round(real));
     savArr.push(Math.round(withSav));
     grossArr.push(Math.round(gross));
-    divArr.push(Math.round(withSav*dv*(1-whtPct)));
+    divArr.push(divErtrag);
   }
-  const endNom=nomArr[years]+startCash,endReal=realArr[years]+startCash,endSav=savArr[years]+startCash;
-  const endGross=grossArr[years]+startCash;
+
+  const endNom=Math.round(nom+startCash);
+  const endSav=Math.round(withSav+startCash);
+  const endReal=Math.round(real+startCash);
+  const endGross=Math.round(gross+startCash);
   const costDiff=endGross-endSav;
   const endDiv=divArr[years],endDivMon=Math.round(endDiv/12);
+
   const milestones=[];
-  for(let y=1;y<=years;y++){const dm=Math.round(divArr[y]/12);[1000,2000,3000,5000,10000].forEach(t=>{if(dm>=t&&!milestones.find(x=>x.t===t))milestones.push({t,year:y,ann:divArr[y]})})}
+  for(let y=1;y<=years;y++){
+    const dm=Math.round(divArr[y]/12);
+    [1000,2000,3000,5000,10000].forEach(t=>{
+      if(dm>=t&&!milestones.find(x=>x.t===t))milestones.push({t,year:y,ann:divArr[y]});
+    });
+  }
+
   const resEl=document.getElementById('proj-results');if(!resEl)return;
 
-  // ── OUTPUT ──
+  // P3: FIRE-relevant note
+  const fireYrsNeeded=fireParams?.yrs||null;
+
   let h=`
+  <!-- P1 FIX: Erklärung was wächst -->
+  <div style="background:var(--bg3);border-radius:9px;padding:10px 13px;margin-bottom:14px;font-size:10.5px;color:var(--tx2);display:flex;gap:10px;align-items:flex-start">
+    <span>ℹ</span>
+    <span>Anlagen + 3a (<strong class="blur-val">${fmt(startAnl)}</strong>) wachsen mit ${rNet>0?(rNet*100).toFixed(2)+'% Netto-Rendite':'0% — TER höher als Rendite!'} (${rate}% Brutto − ${ter}% TER).
+    Cash (<strong class="blur-val">${fmt(startCash)}</strong>) wächst nicht. Real-Wert zeigt Kaufkraft in heutigen Franken.</span>
+  </div>
+
   <!-- MAIN RESULT -->
   <div style="margin-bottom:16px">
-    <div style="font-size:9px;color:var(--tx3);letter-spacing:0.1em;text-transform:uppercase;font-family:var(--fm);margin-bottom:10px;display:flex;align-items:center;gap:8px"><span>━━</span> Ergebnis nach ${years} Jahren <span>━━</span></div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-      <div class="mc"><div class="mc-l">Startpunkt heute</div><div class="mc-v blur-val">${fmt(lastT.gesamt)}</div><div class="mc-s mut blur-val">Anl. ${fmt(startAnl)} + Cash ${fmt(startCash)}</div></div>
+    <div style="font-size:9px;color:var(--tx3);letter-spacing:0.1em;text-transform:uppercase;font-family:var(--fm);margin-bottom:10px">Ergebnis nach ${years} Jahren</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+      <div class="mc"><div class="mc-l">Startpunkt heute</div><div class="mc-v blur-val">${fmt(startTotal)}</div><div class="mc-s mut blur-val">Anl+3a ${fmt(startAnl)} · Cash ${fmt(startCash)}</div></div>
       <div class="mc" style="border-color:rgba(74,222,128,0.3);background:linear-gradient(140deg,rgba(74,222,128,0.07),transparent)">
         <div class="mc-l">Ohne Sparrate <span style="color:var(--tx3)">(nominal)</span></div>
         <div class="mc-v blur-val pos">${fmt(endNom)}</div>
-        <div class="mc-s pos blur-val">+${fmt(endNom-lastT.gesamt)} Zuwachs</div>
-        <div class="mc-s mut">${rate}% Rendite, kein Sparen</div>
+        <div class="mc-s pos blur-val">+${fmt(endNom-startTotal)}</div>
+        <div class="mc-s mut">${(rNet*100).toFixed(1)}% Netto p.a.</div>
       </div>
       <div class="mc" style="border-color:rgba(251,191,36,0.3);background:linear-gradient(140deg,rgba(251,191,36,0.06),transparent)">
         <div class="mc-l">Mit Sparrate <span style="color:var(--tx3)">(nominal)</span></div>
         <div class="mc-v blur-val" style="color:var(--am)">${fmt(endSav)}</div>
-        <div class="mc-s pos blur-val">+${fmt(endSav-lastT.gesamt)} Zuwachs</div>
-        <div class="mc-s mut">inkl. Sparrate Phase 1/2</div>
+        <div class="mc-s pos blur-val">+${fmt(endSav-startTotal)}</div>
+        <div class="mc-s mut">inkl. CHF ${fmtN(extraSavings)}/Mt Sparrate</div>
       </div>
       <div class="mc">
-        <div class="mc-l">Real <span style="color:var(--tx3)">(nach ${inflation}% Inflation)</span></div>
+        <div class="mc-l">Real <span style="color:var(--tx3)">(${inflation}% Inflation)</span></div>
         <div class="mc-v blur-val">${fmt(endReal)}</div>
-        <div class="mc-s mut">Kaufkraft in heutigem CHF</div>
-        <div class="mc-s ${endReal>=lastT.gesamt?'pos':'neg'} blur-val">${endReal>=lastT.gesamt?'+':''}${fmt(endReal-lastT.gesamt)}</div>
+        <div class="mc-s mut">Kaufkraft in heutigen CHF</div>
+        <div class="mc-s ${endReal>=startTotal?'pos':'neg'} blur-val">${endReal>=startTotal?'+':''}${fmt(endReal-startTotal)}</div>
       </div>
     </div>
   </div>
 
   <!-- PASSIVES EINKOMMEN -->
   <div class="widget" style="margin-bottom:12px">
-    <div class="widget-hd"><span class="widget-title">💰 Passives Einkommen — Dividenden (${divYield}% Rendite)</span></div>
+    <div class="widget-hd"><span class="widget-title">💰 Passives Einkommen (${divYield}% Dividende, nach WHT)</span></div>
     <div class="widget-body">
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
         <div class="mc"><div class="mc-l">Heute / Monat</div><div class="mc-v blur-val">${fmt(Math.round(divArr[0]/12))}</div><div class="mc-s mut blur-val">${fmt(divArr[0])} / Jahr</div></div>
         <div class="mc hero"><div class="mc-l">In ${years} Jahren / Monat</div><div class="mc-v blur-val">${fmt(endDivMon)}</div><div class="mc-s pos blur-val">${fmt(endDiv)} / Jahr</div></div>
-        <div class="mc"><div class="mc-l">Wachstum passives Eink.</div><div class="mc-v pos blur-val">×${(endDivMon/(Math.round(divArr[0]/12)||1)).toFixed(1)}</div><div class="mc-s mut">Faktor über ${years} Jahre</div></div>
+        <div class="mc"><div class="mc-l">Wachstum</div><div class="mc-v pos blur-val">×${(endDivMon/(Math.round(divArr[0]/12)||1)).toFixed(1)}</div><div class="mc-s mut">Faktor über ${years} Jahre</div></div>
       </div>
-      ${milestones.length?`
-        <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.08em">Wann erreiche ich diese Meilensteine?</div>
-        <div style="display:grid;grid-template-columns:repeat(${Math.min(milestones.length,3)},1fr);gap:6px">
-          ${milestones.map(m=>`<div style="background:var(--bg3);border-radius:7px;padding:8px 10px"><div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-bottom:3px">CHF ${(m.t/1000).toFixed(0)}k passiv/Monat</div><div style="font-family:var(--fm);font-size:12px;font-weight:500;color:var(--gr)">Jahr ${m.year}</div><div style="font-size:9px;color:var(--tx2);font-family:var(--fm)">${new Date().getFullYear()+m.year}</div></div>`).join('')}
-        </div>`:`<div style="font-size:10.5px;color:var(--tx3);font-family:var(--fm);padding:8px;background:var(--bg3);border-radius:7px">Im gewählten Zeitraum werden die Dividenden-Meilensteine nicht erreicht. Erhöhe die Sparrate oder verlängere den Zeithorizont.</div>`}
-      <div style="margin-top:8px;font-size:8.5px;color:var(--tx3);font-family:var(--fm)">Berechnung: ${divYield}% auf projiziertes Anlagevermögen (mit Sparrate)</div>
+      ${milestones.length?`<div style="display:grid;grid-template-columns:repeat(${Math.min(milestones.length,3)},1fr);gap:6px">
+        ${milestones.map(m=>`<div style="background:var(--bg3);border-radius:7px;padding:8px 10px"><div style="font-size:9px;color:var(--tx3);margin-bottom:3px">CHF ${(m.t/1000).toFixed(0)}k/Mt passiv</div><div style="font-family:var(--fm);font-size:12px;font-weight:500;color:var(--gr)">Jahr ${m.year}</div><div style="font-size:9px;color:var(--tx2)">${new Date().getFullYear()+m.year}</div></div>`).join('')}
+      </div>`:''}
     </div>
   </div>
 
-  <!-- SZENARIEN -->
+  <!-- P2: SZENARIEN — nur Netto-Endwert -->
   <div class="widget" style="margin-bottom:12px">
-    <div class="widget-hd"><span class="widget-title">📊 Szenarien-Vergleich — alle bei ${years} Jahren</span></div>
+    <div class="widget-hd"><span class="widget-title">📊 Szenarien — Endwert nach ${years} J. (netto, nach TER ${ter}%)</span></div>
     <div class="widget-body">
-      <table class="dtbl">
-        <thead><tr><th>Szenario</th><th>Brutto</th><th>Netto (−TER)</th><th>Endwert</th><th>Zuwachs</th><th>Div./Mt</th></tr></thead>
-        <tbody>${[{l:'Pessimistisch',r:2,c:'var(--tx2)'},{l:'Konservativ',r:4,c:'var(--tx)'},{l:'Ausgewogen',r:6,c:'var(--am)'},{l:'Historisch ✓',r:7,c:'var(--gr)'},{l:'Optimistisch',r:10,c:'var(--vi)'}].map((s,si)=>{
-          const rNet=Math.max(0,s.r-ter); // net of TER
-          let a=startAnl;for(let y=1;y<=years;y++){const sv=y<=phase2start?extraSavings:phase2savings;a=a*(1+(rNet/100))+sv}
-          const tot=Math.round(a+startCash);const div=Math.round(a*dv);const isActive=Math.abs(s.r-rate)<0.5;
-          return`<tr style="${isActive?'background:var(--gbg)':''}"><td class="tdb" style="color:${s.c}">${s.l}</td><td style="color:var(--tx3)">${s.r}%</td><td style="color:var(--tx3)">${rNet.toFixed(1)}%</td><td class="blur-val" style="font-weight:500;color:${s.c}">${fmt(tot)}</td><td class="blur-val ${tot>=lastT.gesamt?'pos':'neg'}">${tot>=lastT.gesamt?'+':''}${fmt(tot-lastT.gesamt)}</td><td class="blur-val">${fmt(Math.round(div/12))}</td></tr>`;
-        }).join('')}</tbody>
-      </table>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${[{l:'Pessimistisch',r:2,c:'var(--tx3)'},{l:'Konservativ',r:4,c:'var(--tx)'},{l:'Ausgewogen',r:6,c:'var(--am)'},{l:'Historisch',r:7,c:'var(--gr)'},{l:'Optimistisch',r:10,c:'var(--vi)'}].map(s=>{
+          const rN=Math.max(0,s.r/100-terPct);
+          let a=startAnl;
+          for(let y=1;y<=years;y++){const sv=y<=phase2start?extraSavings:phase2savings;a=a*(1+rN)+sv;}
+          const tot=Math.round(a+startCash);
+          const diff=tot-startTotal;
+          const isActive=Math.abs(s.r-rate)<0.5;
+          const bar=Math.min(100,Math.max(5,((tot-startTotal)/(endGross-startTotal||1))*100));
+          return `<div style="padding:10px 12px;background:${isActive?'rgba(74,222,128,0.06)':'var(--bg3)'};border-radius:8px;${isActive?'border:1px solid rgba(74,222,128,0.2)':''}">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:11px;font-weight:500;color:${s.c}">${s.l}${isActive?' ✓':''} · ${s.r}% brutto → ${(rN*100).toFixed(1)}% netto</span>
+              <span class="blur-val" style="font-family:var(--fm);font-size:13px;font-weight:600;color:${s.c}">${fmt(tot)}</span>
+            </div>
+            <div style="height:5px;background:var(--bg);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${bar}%;background:${s.c};border-radius:3px;opacity:0.7"></div>
+            </div>
+            <div class="blur-val" style="font-size:9.5px;color:var(--tx3);margin-top:3px;font-family:var(--fm)">${diff>=0?'+':''}${fmt(diff)} Zuwachs · Div. ${fmt(Math.round(a*dv/12))}/Mt</div>
+          </div>`;
+        }).join('')}
+        ${costDiff>0?`<div style="font-size:10px;color:var(--tx3);padding:6px 0">TER-Kosten über ${years} Jahre: <strong class="blur-val" style="color:var(--rd)">${fmt(costDiff)}</strong> Performanceverlust</div>`:''}
+      </div>
     </div>
   </div>`;
 
-  h+=mkWidget('proj-chart',`Projektion über ${years} Jahre`,`<div class="cwrap" style="height:260px"><canvas id="proj-chart-c" role="img" aria-label="Projektion">Projektion</canvas></div><div class="cleg"><div class="cli"><span class="cldot" style="background:#4ade80"></span>Nominal</div><div class="cli"><span class="cldot" style="background:#60a5fa"></span>Real</div><div class="cli"><span class="cldot" style="background:#fbbf24"></span>Mit Sparrate</div><div class="cli"><span class="cldot" style="background:#484850"></span>Cash</div></div>`);
-  h+=`<div class="proj-disclaimer">⚠ Veranschaulichung ohne Gewähr. Keine Anlageberatung. Steuern und Kosten nicht berücksichtigt.</div>`;
+  // Chart
+  h+=mkWidget('proj-chart',`Projektion über ${years} Jahre`,`<div class="cwrap" style="height:260px"><canvas id="proj-chart-c" role="img"></canvas></div><div class="cleg"><div class="cli"><span class="cldot" style="background:#4ade80"></span>Nominal (ohne Sparrate)</div><div class="cli"><span class="cldot" style="background:#fbbf24"></span>Mit Sparrate</div><div class="cli"><span class="cldot" style="background:#60a5fa"></span>Real</div><div class="cli"><span class="cldot" style="background:#484850"></span>Cash</div></div>`);
+
+  // P1: Jahr-für-Jahr Tabelle
+  h+=`<div class="widget" style="margin-bottom:12px">
+    <div class="widget-hd" onclick="this.parentElement.querySelector('.ytbl-body').style.display=this.parentElement.querySelector('.ytbl-body').style.display==='none'?'block':'none'" style="cursor:pointer">
+      <span class="widget-title">📅 Jahr-für-Jahr Entwicklung</span>
+      <span style="font-size:10px;color:var(--tx3);font-family:var(--fm)">Klicken zum Ein-/Ausklappen</span>
+    </div>
+    <div class="ytbl-body widget-body" style="display:none;padding:0">
+      <div style="overflow-x:auto">
+        <table style="border-collapse:collapse;width:100%;min-width:600px;font-size:10.5px">
+          <thead>
+            <tr style="background:var(--bg3)">
+              <th style="text-align:left;padding:8px 12px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);white-space:nowrap;font-family:var(--fb)">Jahr</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);white-space:nowrap;font-family:var(--fb)">Rendite-Ertrag</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);white-space:nowrap;font-family:var(--fb)">Sparrate</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);white-space:nowrap;font-family:var(--fb)">Div./Mt</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:2px solid var(--bdr2);white-space:nowrap;font-family:var(--fb)">Ohne Sparrate</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);white-space:nowrap;font-family:var(--fb)">Mit Sparrate</th>
+              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:9.5px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);white-space:nowrap;font-family:var(--fb)">Real</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.filter((_,i)=>i<3||i%Math.max(1,Math.floor(years/15))===0||i===rows.length-1).map((row,ri,arr)=>{
+              const isLast=ri===arr.length-1;
+              const nowY=new Date().getFullYear();
+              const rowBg=isLast?'var(--bg3)':ri%2===0?'var(--bg)':'';
+              return `<tr style="background:${rowBg}${isLast?';border-top:2px solid var(--bdr2)':''}">
+                <td style="padding:7px 12px;color:var(--tx2);border-bottom:1px solid var(--bdr);white-space:nowrap">${row.y===1?'Jahr 1':row.y===rows.length?`Jahr ${row.y} <span style="color:var(--tx3)">(Ende)</span>`:`Jahr ${row.y}`}<span style="color:var(--tx3);font-size:9px"> · ${nowY+row.y}</span></td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);color:var(--gr);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">+${fmtN(row.rendite)}</td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);color:${row.savAdd>0?'var(--bl)':'var(--tx3)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${row.savAdd>0?'+'+fmtN(row.savAdd):'-'}</td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);color:var(--tx2);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtN(row.div)}</td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);font-weight:${isLast?600:400};color:var(--tx);border-left:2px solid var(--bdr2);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(row.nom)}</td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);font-weight:${isLast?600:400};color:var(--am);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(row.withSav)}</td>
+                <td style="text-align:right;padding:7px 10px;font-family:var(--fm);color:var(--tx2);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmt(row.real)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+
+  h+=`<div class="proj-disclaimer">⚠ Veranschaulichung ohne Gewähr. Keine Anlageberatung. Steuern und Kosten nicht vollständig berücksichtigt.</div>`;
   resEl.innerHTML=h;
-  dC('proj');const projEl=document.getElementById('proj-chart-c');
-  if(projEl){const nowY=new Date().getFullYear();const labels=Array.from({length:years+1},(_,i)=>(nowY+i).toString());charts['proj']=new Chart(projEl.getContext('2d'),{type:'line',data:{labels,datasets:[{label:'Nominal',data:nomArr.map((v,i)=>v+startCash),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.07)',fill:true,tension:0.3,borderWidth:2,pointRadius:0},{label:'Real',data:realArr.map(v=>v+startCash),borderColor:'#60a5fa',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[5,3]},{label:'Mit Sparrate',data:savArr.map(v=>v+startCash),borderColor:'#fbbf24',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[3,3]},{label:'Cash',data:Array(years+1).fill(startCash),borderColor:'#484850',fill:false,tension:0,borderWidth:1,pointRadius:0,borderDash:[2,5]}]},options:{...cOpts(),plugins:{...cOpts().plugins,tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmt(c.raw)}}}}})}
+
+  dC('proj');
+  const projEl=document.getElementById('proj-chart-c');
+  if(projEl){
+    const nowY=new Date().getFullYear();
+    const labels=Array.from({length:years+1},(_,i)=>(nowY+i).toString());
+    charts['proj']=new Chart(projEl.getContext('2d'),{
+      type:'line',
+      data:{labels,datasets:[
+        {label:'Nominal',data:nomArr.map((v,i)=>v+startCash),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.07)',fill:true,tension:0.3,borderWidth:2,pointRadius:0},
+        {label:'Mit Sparrate',data:savArr.map(v=>v+startCash),borderColor:'#fbbf24',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[3,3]},
+        {label:'Real',data:realArr.map(v=>v+startCash),borderColor:'#60a5fa',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[5,3]},
+        {label:'Cash',data:Array(years+1).fill(startCash),borderColor:'#484850',fill:false,tension:0,borderWidth:1,pointRadius:0,borderDash:[2,5]},
+      ]},
+      options:{...cOpts(),plugins:{...cOpts().plugins,tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmt(c.raw)}}}}
+    });
+  }
   if(widgetState['proj-chart']){const el=document.getElementById('w-proj-chart');if(el){el.classList.add('collapsed');const t=el.querySelector('.widget-toggle');if(t)t.textContent='▶'}}
 }
+
+
 
 // ══ RENTENRECHNER (#3) ══
 function setRentePerson(p,btn){rentePerson=p;document.querySelectorAll('#rt-vt-p1,#rt-vt-p2').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderRente()}
@@ -7111,10 +7217,15 @@ function renderFireRechner(){
     <button id="firevt-partner" class="bptab ${firePersonView==='partner'?'active':''}" onclick="setFirePerson('partner')">${n2()}</button>
   </div>
 
-  <!-- Grunddaten -->
-  <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:14px">
+  <!-- ①  GRUNDDATEN -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--bl);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">1</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">Grunddaten & Parameter</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
+  <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:11px;font-weight:500;color:var(--tx2);text-transform:uppercase;letter-spacing:.04em">Grunddaten — ${personName}</div>
+      <div style="font-size:10.5px;color:var(--tx2)">Vermögen & Annahmen für <strong>${personName}</strong></div>
       <button onclick="if(firePersonView==='ich'){fireParamsIch=null;}else if(firePersonView==='partner'){fireParamsPartner=null;}else{fireParams=null;}renderFireRechner()"
         style="background:var(--bg);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Auto-Werte</button>
     </div>
@@ -7161,6 +7272,12 @@ function renderFireRechner(){
     </div>
   </div>
 
+  <!-- ②  STATUS -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--gr);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">2</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">FIRE-Status auf einen Blick</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
   <!-- Status Cards -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
     <div style="background:var(--bg3);border-radius:10px;padding:11px 13px;border-left:3px solid ${yrs?'var(--gr)':'var(--rd)'}">
@@ -7198,6 +7315,12 @@ function renderFireRechner(){
     </div>
   </div>
 
+  <!-- ⑤  GRAFIKEN -->
+  <div style="display:flex;align-items:center;gap:8px;margin:20px 0 8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--tx2);color:var(--bg);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">5</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">Depot-Entwicklung & Cashflow</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
   <!-- CHART 1: Depot Fächer -->
   <div class="widget" style="margin-bottom:14px">
     <div class="widget-hd"><span class="widget-title">📈 Depot-Entwicklung — ${personName}</span></div>
@@ -7228,6 +7351,12 @@ function renderFireRechner(){
     </div>
   </div>`:''}
 
+  <!-- ③  BEGRIFFE -->
+  <div style="display:flex;align-items:center;gap:8px;margin:20px 0 8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--am);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">3</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">Was bedeutet das?</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
   <!-- FIRE Begriffe -->
   <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
     ${[
@@ -7249,7 +7378,12 @@ function renderFireRechner(){
     </div>`).join('')}
   </div>
 
-  <!-- ZEITSTRAHL -->
+  <!-- ④  ZEITSTRAHL -->
+  <div style="display:flex;align-items:center;gap:8px;margin:20px 0 8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--vi);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">4</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">Meilensteine & Zeitstrahl</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
   <div class="widget" style="margin-bottom:14px">
     <div class="widget-hd"><span class="widget-title">📅 Zeitstrahl — ${personName}</span></div>
     <div class="widget-body">
@@ -7306,6 +7440,12 @@ function renderFireRechner(){
     </div>
   </div>
 
+  <!-- ⑥  SZENARIEN & DETAILS -->
+  <div style="display:flex;align-items:center;gap:8px;margin:20px 0 8px">
+    <div style="width:22px;height:22px;border-radius:50%;background:var(--tx3);color:var(--bg);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">6</div>
+    <div style="font-size:12px;font-weight:600;color:var(--tx)">Entnahme-Szenarien & Hinweise</div>
+    <div style="flex:1;height:1px;background:var(--bdr)"></div>
+  </div>
   <!-- Entnahme-Tabelle -->
   <div style="font-size:10px;color:var(--tx3);font-weight:500;letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px">Entnahme-Szenarien bei FIRE</div>
   <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px">
