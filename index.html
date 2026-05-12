@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='36.0.0';
+const APP_VERSION='38.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1190,28 +1190,23 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
         <button id="sumtab-kpis" class="bptab active" onclick="setSumTab('kpis')">📊 Übersicht</button>
         <button id="sumtab-allokation" class="bptab" onclick="setSumTab('allokation')">🥧 Allokation</button>
+        <button id="sumtab-verlauf" class="bptab" onclick="setSumTab('verlauf')">📈 Verlauf</button>
       </div>
       <div id="summary-body"></div>
-      <!-- Verlauf section below -->
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--bdr)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
-          <div>
-            <div style="font-family:var(--fh);font-size:22px;letter-spacing:-0.4px;font-style:italic;line-height:1.1">Verlauf</div>
-            <div id="vl-sub" style="font-size:12px;color:var(--tx2);margin-top:3px">Historische Entwicklung</div>
-          </div>
-          <div class="per-row">
-            <button class="pb" onclick="setPer('6m',this)">6M</button>
-            <button class="pb active" onclick="setPer('12m',this)">12M</button>
-            <button class="pb" onclick="setPer('ytd',this)">YTD</button>
-            <button class="pb" onclick="setPer('all',this)">Alle</button>
-            <button class="pb" onclick="setPer('custom',this)">Custom</button>
-          </div>
+      <!-- Hidden Verlauf controls — used when verlauf tab active -->
+      <div id="vl-controls" style="display:none;margin:0 16px 14px;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+        <div id="vl-sub" style="font-size:12px;color:var(--tx2)">Historische Entwicklung</div>
+        <div class="per-row">
+          <button class="pb" onclick="setPer('6m',this)">6M</button>
+          <button class="pb active" onclick="setPer('12m',this)">12M</button>
+          <button class="pb" onclick="setPer('ytd',this)">YTD</button>
+          <button class="pb" onclick="setPer('all',this)">Alle</button>
+          <button class="pb" onclick="setPer('custom',this)">Custom</button>
         </div>
-        <div class="crange" id="crange" style="display:none;margin-bottom:12px">
+        <div class="crange" id="crange" style="display:none;width:100%;gap:8px;align-items:center">
           <span>Von</span><input type="month" id="per-from"><span>bis</span><input type="month" id="per-to">
           <button class="btn btn-gh btn-sm" onclick="renderVerlauf()">Anwenden</button>
         </div>
-        <div id="vl-body"></div>
       </div>
     </div>
 
@@ -2831,53 +2826,52 @@ function buildAllocationSnapshot(month, view){
 // Build Cash vs Anlagen trend chart (last N months) for Übersicht-Allokations-Widget
 function buildAllocationTrend(months, view){
   if(!months||months.length<2)return '';
-  // For each month, compute cash share + anlagen share
   const data=months.map(m=>{
     const t=getT(m, view);
-    const total=t.gesamt||0;
-    return {month:m, cash:t.cash||0, anl:t.anlagen||0, total, cashPct:total>0?(t.cash/total*100):0, anlPct:total>0?(t.anlagen/total*100):0};
+    const total=Math.max(1,t.gesamt||0);
+    return {month:m,cash:t.cash||0,anl:t.anlagen||0,s3a:t.s3aTotal||0,total,
+      cashPct:total>0?(t.cash/total*100):0,
+      anlPct:total>0?(t.anlagen/total*100):0};
   });
-  const last=data[data.length-1];
-  const first=data[0];
+  const last=data[data.length-1];const first=data[0];
   if(last.total===0)return '';
-  const cashChange=last.cashPct-first.cashPct;
   const anlChange=last.anlPct-first.anlPct;
+  const cashChange=last.cashPct-first.cashPct;
+  // Store data for chart rendering
+  window._allocTrendData=data;
 
-  return `<div style="background:var(--bg3);border-radius:10px;padding:13px 15px;margin-bottom:14px">
-    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-      <div style="font-size:10.5px;color:var(--tx2);font-weight:500">Cash vs. Anlagen-Anteil — ${months.length} Monate</div>
-      <div style="font-size:9.5px;color:var(--tx3);font-family:var(--fm)">${fmtM(first.month)} → ${fmtM(last.month)}</div>
-    </div>
-    <!-- Stacked bars over time -->
-    <div style="display:flex;gap:2px;height:36px;align-items:end;border-radius:5px;overflow:hidden;margin-bottom:7px">
-      ${data.map(d=>{
-        const cashH=d.cashPct;
-        const anlH=d.anlPct;
-        const isLast=d===last;
-        return `<div style="flex:1;display:flex;flex-direction:column-reverse;height:100%;min-width:0;${isLast?'box-shadow:0 0 0 1px var(--bl);border-radius:2px;':''}" title="${fmtM(d.month)}: Cash ${cashH.toFixed(0)}% · Anlagen ${anlH.toFixed(0)}%">
-          <div style="height:${cashH}%;background:#94a3b8;min-height:1px"></div>
-          <div style="height:${anlH}%;background:var(--gr);min-height:1px"></div>
-        </div>`;
-      }).join('')}
-    </div>
-    <!-- Legend with totals + change -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:10.5px">
-      <div style="display:flex;align-items:center;gap:7px">
-        <span style="width:9px;height:9px;border-radius:2px;background:var(--gr);flex-shrink:0"></span>
-        <div style="min-width:0">
-          <div style="color:var(--tx2)">Anlagen <span class="blur-val" style="font-family:var(--fm);color:var(--tx)">${last.anlPct.toFixed(0)}%</span></div>
-          ${Math.abs(anlChange)>0.5?`<div style="font-size:9.5px;color:${anlChange>0?'var(--gr)':'var(--am)'};font-family:var(--fm)">${anlChange>=0?'+':''}${anlChange.toFixed(1)} pp</div>`:''}
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:7px">
-        <span style="width:9px;height:9px;border-radius:2px;background:#94a3b8;flex-shrink:0"></span>
-        <div style="min-width:0">
-          <div style="color:var(--tx2)">Cash <span class="blur-val" style="font-family:var(--fm);color:var(--tx)">${last.cashPct.toFixed(0)}%</span></div>
-          ${Math.abs(cashChange)>0.5?`<div style="font-size:9.5px;color:${cashChange<0?'var(--gr)':'var(--am)'};font-family:var(--fm)">${cashChange>=0?'+':''}${cashChange.toFixed(1)} pp</div>`:''}
-        </div>
+  return `<div class="widget" style="margin-bottom:14px">
+    <div class="widget-hd"><span class="widget-title">📊 Cash vs. Anlagen Entwicklung</span></div>
+    <div class="widget-body">
+      <div style="height:180px"><canvas id="alloc-trend-chart"></canvas></div>
+      <div class="cleg" style="margin-top:8px">
+        <div class="cli"><span class="cldot" style="background:#4ade80"></span>Anlagen <span style="font-family:var(--fm);color:var(--tx);margin-left:4px">${last.anlPct.toFixed(0)}%${Math.abs(anlChange)>0.5?` <span style="color:${anlChange>0?'var(--gr)':'var(--am)'}">${anlChange>=0?'+':''}${anlChange.toFixed(1)}pp</span>`:''}</span></div>
+        <div class="cli"><span class="cldot" style="background:#60a5fa"></span>Cash <span style="font-family:var(--fm);color:var(--tx);margin-left:4px">${last.cashPct.toFixed(0)}%${Math.abs(cashChange)>0.5?` <span style="color:${cashChange<0?'var(--gr)':'var(--am)'}">${cashChange>=0?'+':''}${cashChange.toFixed(1)}pp</span>`:''}</span></div>
+        ${last.s3a>0?`<div class="cli"><span class="cldot" style="background:#fbbf24"></span>3a ${last.total>0?(last.s3a/last.total*100).toFixed(0):'0'}%</div>`:''}
       </div>
     </div>
   </div>`;
+}
+
+function renderAllocTrendChart(){
+  const el=document.getElementById('alloc-trend-chart');
+  if(!el||!window._allocTrendData)return;
+  const data=window._allocTrendData;
+  const labels=data.map(d=>fmtM(d.month));
+  dC('alloc-trend');
+  charts['alloc-trend']=new Chart(el.getContext('2d'),{
+    type:'line',
+    data:{labels,datasets:[
+      {label:'Anlagen %',data:data.map(d=>+d.anlPct.toFixed(1)),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.08)',fill:true,tension:0.4,borderWidth:2,pointRadius:2,yAxisID:'pct'},
+      {label:'Cash %',data:data.map(d=>+d.cashPct.toFixed(1)),borderColor:'#60a5fa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,yAxisID:'pct'},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      scales:{
+        pct:{type:'linear',position:'left',min:0,max:100,ticks:{callback:v=>v+'%',font:{size:9}},grid:{color:'rgba(128,128,128,0.08)'}},
+        x:{ticks:{font:{size:9},maxTicksLimit:8},grid:{display:false}}
+      },
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.raw+'%'}}}}
+  });
 }
 
 
@@ -2976,7 +2970,7 @@ function launch(){
   const now=new Date();
   currentEntryMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   updatePersonLabels();ss('ok','Bereit');
-  renderEingabeNav();renderForm();renderSummary();renderVerlauf();
+  renderEingabeNav();renderForm();renderSummary();
   hideOv();
   if(syncTimer)clearInterval(syncTimer);
   syncTimer=setInterval(async()=>{
@@ -2996,7 +2990,7 @@ function launch(){
 }
 function refreshPage(){
   const id=document.querySelector('.page.active')?.id;
-  if(id==='page-summary'){renderSummary();renderVerlauf()}
+  if(id==='page-summary'){renderSummary()}
   else if(id==='page-dash'){popDashSel();renderDash()}
   else if(id==='page-projektion')renderProjektion();
   else if(id==='page-rente')renderRente();
@@ -3021,7 +3015,7 @@ async function goTo(p){
   document.querySelectorAll('.nb').forEach(x=>x.classList.remove('active'));
   document.getElementById('page-'+p).classList.add('active');
   ['summary','dash','budgetplan','projektion','rente','eingabe','budget','ziele'].forEach((n,i)=>{if(n===p)document.querySelectorAll('.nb')[i]?.classList.add('active')});
-  if(p==='summary'){renderSummary();renderVerlauf()}
+  if(p==='summary'){renderSummary()}
   if(p==='dash'){popDashSel();renderDash()}
   if(p==='projektion')renderProjektion();
   if(p==='rente')renderRente();
@@ -3973,15 +3967,19 @@ function setSumTab(tab){
   sumTab=tab;
   document.querySelectorAll('[id^="sumtab-"]').forEach(b=>b.classList.remove('active'));
   document.getElementById('sumtab-'+tab)?.classList.add('active');
-  // Hide verlauf section on allokation tab
-  const verlaufEl=document.querySelector('#page-summary > div[style*="border-top"]');
-  if(verlaufEl)verlaufEl.style.display=tab==='allokation'?'none':'';
+  const vlCtrl=document.getElementById('vl-controls');
+  if(vlCtrl)vlCtrl.style.display=tab==='verlauf'?'flex':'none';
   renderSummary();
 }
 
 function renderSummary(){
   const body=document.getElementById('summary-body');
   if(sumTab==='allokation'){renderAllokationTab(body);return;}
+  if(sumTab==='verlauf'){
+    body.innerHTML='<div id="vl-body"></div>';
+    renderVerlauf();
+    return;
+  }
   const vw=currentView;
   const ms=validMonths(vw);
   const viewLabel=vw==='gesamt'?'Gesamt':vw==='p1'?n1():n2();
@@ -4047,6 +4045,19 @@ function renderSummary(){
           <div class="kpi-row"><span class="kpi-lbl">Ø Zuwachs / Monat</span><span class="kpi-val ${avgMonthly>=0?'pos':'neg'} blur-val">${avgMonthly>=0?'+':''}${fmt(avgMonthly)}</span></div>
           <div class="kpi-row"><span class="kpi-lbl">YTD Zuwachs</span><span class="kpi-val ${ytdGain>=0?'pos':'neg'} blur-val">${ytdGain>=0?'+':''}${fmt(ytdGain)} (${ytdPct}%)</span></div>
           <div class="kpi-row"><span class="kpi-lbl">Monate erfasst</span><span class="kpi-val">${ms.length}</span></div>
+          ${(()=>{
+            const hh=calcHousehold();
+            const bt=budgetTotals();
+            const kita=calcKitaKosten();
+            const kitaIn=getBudget().find(c=>c.id==='kind')?.items.some(i=>i.id==='kita'&&budgetItemAmt(i)>0);
+            const ausgaben=bt.total+(kitaIn?0:kita.monat);
+            const netto=hh.nettoMonat;
+            const sparrate=Math.max(0,netto-ausgaben);
+            const sqPct=netto>0?(sparrate/netto*100):0;
+            const sqColor=sqPct>=25?'var(--gr)':sqPct>=15?'var(--am)':'var(--rd)';
+            return netto>0?`<div class="kpi-row"><span class="kpi-lbl">Sparquote (Plan)</span><span class="kpi-val" style="color:${sqColor}">${sqPct.toFixed(1)}%</span></div>
+          <div class="kpi-row"><span class="kpi-lbl">Sparrate/Mt</span><span class="kpi-val blur-val">${fmt(sparrate)}</span></div>`:'';
+          })()}
         </div>
       </div>
       ${goals.length?`<div class="widget"><div class="widget-hd"><span class="widget-title">Ziele</span></div><div class="widget-body">${goals.slice(0,3).map(g=>goalHTML(g,tLast)).join('')}</div></div>`:''}
@@ -4088,6 +4099,20 @@ function renderSummary(){
 
   // Kinder-Sparziele Widget
   // Kinder-Sparziele wurden in den Ziele-Tab verschoben (kompaktere Übersicht)
+
+  // Quick navigation to next steps
+  h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
+    <button onclick="goTo('projektion')" style="display:flex;align-items:center;gap:8px;padding:11px 13px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;cursor:pointer;text-align:left">
+      <span style="font-size:16px">📈</span>
+      <div><div style="font-size:11px;font-weight:500;color:var(--tx)">Projektion</div>
+      <div style="font-size:9.5px;color:var(--tx3)">Wohin entwickelt sich dein Vermögen?</div></div>
+    </button>
+    <button onclick="if(typeof setProjTab==='function')setProjTab('fire');goTo('projektion')" style="display:flex;align-items:center;gap:8px;padding:11px 13px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px;cursor:pointer;text-align:left">
+      <span style="font-size:16px">🔥</span>
+      <div><div style="font-size:11px;font-weight:500;color:var(--tx)">FIRE-Rechner</div>
+      <div style="font-size:9.5px;color:var(--tx3)">Wann bist du finanziell unabhängig?</div></div>
+    </button>
+  </div>`;
 
   body.innerHTML=h;
 
@@ -4165,22 +4190,16 @@ function renderDash(){
   let h=metricsH;
   h+=mkWidget('gain','Wertzuwachs','<div id="gain-body"></div>',gainExtra);
   if(note)h+=`<div class="widget" style="border-color:rgba(251,191,36,0.18)"><div style="display:flex;gap:8px"><span style="font-size:13px;flex-shrink:0">📝</span><div><div style="font-size:8.5px;color:var(--tx3);font-family:var(--fm);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px">${fmtM(month)}</div><div style="font-size:11px;color:var(--tx2);line-height:1.55;font-style:italic">${note}</div></div></div></div>`;
-  h+=`<div class="two-col" id="cat-cards"></div>`;
+  h+=`<div id="cat-cards"></div>`;
   if(isSectionVisible('dash_alloc'))h+=mkWidget('alloc','Allokation &amp; Vermögensaufteilung','<div id="alloc-bars"></div>');
-  if(ms.length>1)h+=mkWidget('dash-line','Verlauf',`<div class="cwrap" style="height:210px"><canvas id="c-line" role="img" aria-label="Verlauf">Verlauf</canvas></div><div class="cleg" id="line-leg"></div>`);
+  // Verlauf is now in Übersicht → Verlauf tab — removed from Konten
   body.innerHTML=h;
-  ['gain','alloc','dash-line'].forEach(id=>{if(widgetState[id]){const el=document.getElementById('w-'+id);if(el){el.classList.add('collapsed');const t=el.querySelector('.widget-toggle');if(t)t.textContent='▶'}}});
+  ['gain','alloc'].forEach(id=>{if(widgetState[id]){const el=document.getElementById('w-'+id);if(el){el.classList.add('collapsed');const t=el.querySelector('.widget-toggle');if(t)t.textContent='▶'}}});
   renderGainCards('month',month,ms,mi,t);
   renderCatCards(month,e,t,currentView);
 
   // Enhanced Allocation view — expandable sections
   if(isSectionVisible('dash_alloc'))renderDashAlloc(month, t);
-
-  if(ms.length>1){
-    const cms=ms.slice(-18);const ld=cms.map(m=>({g:getT(m).gesamt,i:personT(m,'ich').gesamt,p:personT(m,'partner').gesamt}));
-    dC('line');const lineEl=document.getElementById('c-line');
-    if(lineEl){let ds=[{label:'Gesamt',data:ld.map(v=>v.g),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.07)',fill:true,tension:0.4,borderWidth:2,pointRadius:3}];let legH=`<div class="cli"><span class="cldot" style="background:#4ade80"></span>Gesamt</div>`;if(currentView==='gesamt'){ds.push({label:n1(),data:ld.map(v=>v.i),borderColor:'#60a5fa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]});ds.push({label:n2(),data:ld.map(v=>v.p),borderColor:'#a78bfa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]});legH+=`<div class="cli"><span class="cldot" style="background:#60a5fa"></span>${n1()}</div><div class="cli"><span class="cldot" style="background:#a78bfa"></span>${n2()}</div>`}charts['line']=new Chart(lineEl.getContext('2d'),{type:'line',data:{labels:cms.map(fmtM),datasets:ds},options:cOpts()});const legEl=document.getElementById('line-leg');if(legEl)legEl.innerHTML=legH}
-  }
 }
 
 // Dashboard Allokation — expandable sections with overview
@@ -4374,15 +4393,130 @@ function currencyColor(id){
 
 function renderCatCards(month,e,t,view){
   const cont=document.getElementById('cat-cards');if(!cont)return;cont.innerHTML='';
-  const ms=aMs(),mi=ms.indexOf(month);const eI=db[month]?.ich||{},eP=db[month]?.partner||{};
-  for(const top of TOP_CATS){
-    const groups=getCats().filter(g=>g.parent===top.id);const topTot=groups.reduce((a,g)=>a+(t.byGroup[g.id]||0),0);
-    const prevE=mi>0?mgd(ms[mi-1]):null;const prevTopTot=prevE?groups.reduce((a,g)=>a+g.items.reduce((b,f)=>b+(prevE[f.id]||0),0),0):null;
-    const topD=prevTopTot!==null?topTot-prevTopTot:null;
-    let card=`<div class="widget" style="margin-bottom:0"><div style="border-bottom:1px solid var(--bdr)"><div class="cat-hd open" onclick="togCat(this)"><div class="cat-hd-l"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9,18 15,12 9,6"/></svg><span class="cat-nm" style="color:${top.color}">${top.label}</span></div><div><span class="cat-tot blur-val" style="color:${top.color}">${fmt(topTot)}</span>${topD!==null?`<span class="cat-dt ${topD>=0?'pos':'neg'} blur-val">${topD>=0?'+':''}${fmt(topD)}</span>`:''}</div></div></div><div class="cat-body" style="max-height:1000px">`;
-    groups.forEach(g=>{const gTot=t.byGroup[g.id]||0,gPct=topTot?((gTot/topTot)*100).toFixed(0):0;card+=`<div class="sg"><div class="sg-bar"><div class="sg-bar-f" style="width:${gPct}%;background:${g.color}"></div></div><div class="sg-hd" onclick="togSG(this)"><span class="sg-nm">${g.label}</span><div class="sg-r"><span class="sg-pct">${gPct}%</span><span class="sg-tot blur-val">${fmt(gTot)}</span></div></div><div class="sg-items" style="display:none">`;g.items.forEach(f=>{const tot=view==='p1'?(eI[f.id]||0):view==='p2'?(eP[f.id]||0):(e[f.id]||0);const ich=eI[f.id]||0,par=eP[f.id]||0;card+=`<div class="ir"><span class="ir-nm">${f.label}</span><div class="ir-r"><div class="ir-tot blur-val">${fmt(tot)}</div>${view==='gesamt'?`<div class="ir-sp"><span style="color:#60a5fa" class="blur-val">${fmt(ich)}</span> · <span style="color:#a78bfa" class="blur-val">${fmt(par)}</span></div>`:''}</div></div>`});card+=`</div></div>`;});
-    card+=`</div></div>`;cont.insertAdjacentHTML('beforeend',card);
+  const ms=aMs(),mi=ms.indexOf(month);
+  const eI=db[month]?.ich||{},eP=db[month]?.partner||{};
+  const prevE=mi>0?mgd(ms[mi-1]):null;
+  const fmtD=(v,c='var(--tx)')=>`<span class="blur-val" style="font-family:var(--fm);color:${c}">${fmt(v)}</span>`;
+  const fmtDelta=(cur,prev)=>{if(prev===null||prev===undefined)return '';const d=cur-prev;return d===0?'':`<span class="blur-val" style="font-size:9.5px;color:${d>0?'var(--gr)':'var(--rd)'};font-family:var(--fm);margin-left:4px">${d>0?'+':''}${fmt(d)}</span>`};
+
+  // ── Section builder ──
+  function mkSection(icon, title, color, items, total, prevTotal){
+    if(!items.length)return '';
+    const delta=prevTotal!==null?total-prevTotal:null;
+    let html=`<div class="widget" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">${icon}</span>
+          <div>
+            <div style="font-size:12px;font-weight:500;color:${color}">${title}</div>
+            <div style="font-size:10px;color:var(--tx3)">${items.length} Konto${items.length===1?'':'s'}</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          ${fmtD(total,color)}
+          ${delta!==null?`<div style="font-size:9.5px;color:${delta>=0?'var(--gr)':'var(--rd)'};font-family:var(--fm)">${delta>=0?'+':''}${fmt(delta)} vs. Vormonat</div>`:''}
+        </div>
+      </div>
+      <!-- Progress bar -->
+      ${t.gesamtMitPK>0?`<div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:10px 0 2px">
+        <div style="height:100%;width:${(total/t.gesamtMitPK*100).toFixed(1)}%;background:${color};border-radius:2px"></div>
+      </div>
+      <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);text-align:right">${(total/t.gesamtMitPK*100).toFixed(1)}% des Gesamtvermögens</div>`:''}
+      <div style="border-top:1px solid var(--bdr);margin-top:10px;padding-top:8px;display:flex;flex-direction:column;gap:3px">`;
+
+    items.forEach(item=>{
+      const ich=eI[item.id]||0,par=eP[item.id]||0;
+      const val=view==='p1'?ich:view==='p2'?par:(e[item.id]||0);
+      if(val===0&&ich===0&&par===0)return;
+      const prevVal=prevE?view==='p1'?(prevE.ich?.[item.id]||0):view==='p2'?(prevE.partner?.[item.id]||0):((prevE.ich?.[item.id]||0)+(prevE.partner?.[item.id]||0)+(prevE.kinder?.[item.id]||0)):null;
+      const ibar=total>0?(val/total*100).toFixed(1):0;
+      html+=`<div style="padding:5px 0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0">
+            <span style="font-size:10px;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHTML(item.label)}</span>
+            ${item.vorsorge==='pk'?'<span style="font-size:8px;background:rgba(167,139,250,0.2);color:var(--vi);padding:1px 5px;border-radius:3px;flex-shrink:0">PK</span>':''}
+            ${item.vorsorge==='s3a'?'<span style="font-size:8px;background:rgba(251,191,36,0.2);color:var(--am);padding:1px 5px;border-radius:3px;flex-shrink:0">3a</span>':''}
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+            ${fmtD(val)}
+            ${fmtDelta(val,prevVal)}
+          </div>
+        </div>
+        ${val>0&&total>0?`<div style="height:2px;background:var(--bg3);border-radius:1px;overflow:hidden">
+          <div style="height:100%;width:${ibar}%;background:${color};opacity:0.5;border-radius:1px"></div>
+        </div>`:''}
+        ${view==='gesamt'&&ich>0&&par>0?`<div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:2px">
+          <span style="color:#60a5fa" class="blur-val">${n1()}: ${fmt(ich)}</span>
+          <span style="margin:0 4px;color:var(--bdr2)">·</span>
+          <span style="color:#a78bfa" class="blur-val">${n2()}: ${fmt(par)}</span>
+        </div>`:''}
+      </div>`;
+    });
+    html+=`</div></div>`;
+    return html;
   }
+
+  // ── Build sections ──
+  const cats=getCats();
+
+  // Collect all items by vorsorge type
+  const freeCashItems=[], freeAnlItems=[], s3aItems=[], pkItems=[];
+  cats.forEach(g=>{
+    g.items.forEach(it=>{
+      const type=itemVorsorge(g.id,it.id);
+      const val=e[it.id]||0;
+      const prevVal=prevE?((prevE.ich?.[it.id]||0)+(prevE.partner?.[it.id]||0)+(prevE.kinder?.[it.id]||0)):0;
+      const item={...it,groupLabel:g.label,prevVal};
+      if(val>0||prevVal>0){
+        if(type==='pk')pkItems.push(item);
+        else if(type==='s3a')s3aItems.push(item);
+        else if(g.parent==='cash')freeCashItems.push(item);
+        else freeAnlItems.push(item);
+      }
+    });
+  });
+
+  // Totals
+  const cashTot=freeCashItems.reduce((s,it)=>s+(e[it.id]||0),0);
+  const anlTot=freeAnlItems.reduce((s,it)=>s+(e[it.id]||0),0);
+  const s3aTot=s3aItems.reduce((s,it)=>s+(e[it.id]||0),0);
+  const pkTot=pkItems.reduce((s,it)=>s+(e[it.id]||0),0);
+  const prevCash=prevE?freeCashItems.reduce((s,it)=>s+(prevE.ich?.[it.id]||0)+(prevE.partner?.[it.id]||0)+(prevE.kinder?.[it.id]||0),0):null;
+  const prevAnl=prevE?freeAnlItems.reduce((s,it)=>s+(prevE.ich?.[it.id]||0)+(prevE.partner?.[it.id]||0)+(prevE.kinder?.[it.id]||0),0):null;
+  const prevS3a=prevE?s3aItems.reduce((s,it)=>s+(prevE.ich?.[it.id]||0)+(prevE.partner?.[it.id]||0)+(prevE.kinder?.[it.id]||0),0):null;
+  const prevPK=prevE?pkItems.reduce((s,it)=>s+(prevE.ich?.[it.id]||0)+(prevE.partner?.[it.id]||0)+(prevE.kinder?.[it.id]||0),0):null;
+
+  // ── Summary Row ──
+  const freeTot=cashTot+anlTot+s3aTot;
+  let summaryH=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr ${pkTot>0?'1fr':''};gap:8px;margin-bottom:14px">
+    <div style="background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.2);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">💵 Cash</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--bl)">${fmt(cashTot)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${freeTot>0?(cashTot/freeTot*100).toFixed(0):'0'}% von frei</div>
+    </div>
+    <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.2);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">📈 Anlagen</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--gr)">${fmt(anlTot)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${freeTot>0?(anlTot/freeTot*100).toFixed(0):'0'}% von frei</div>
+    </div>
+    <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">🏦 Säule 3a</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--am)">${fmt(s3aTot)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">ab Alter ~60</div>
+    </div>
+    ${pkTot>0?`<div style="background:rgba(167,139,250,0.07);border:1px solid rgba(167,139,250,0.2);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">🏛 PK (Säule 2)</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--vi)">${fmt(pkTot)}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">ab Alter ~60 · Rente ~${fmt(calcPKRente(pkTot))}/Mt</div>
+    </div>`:''}
+  </div>`;
+  cont.insertAdjacentHTML('beforeend',summaryH);
+
+  // ── Detail Sections ──
+  cont.insertAdjacentHTML('beforeend',mkSection('📈','Anlagen (Depot, ETFs)','var(--gr)',freeAnlItems,anlTot,prevAnl));
+  cont.insertAdjacentHTML('beforeend',mkSection('💵','Cash & Bankkonten','var(--bl)',freeCashItems,cashTot,prevCash));
+  if(s3aItems.length)cont.insertAdjacentHTML('beforeend',mkSection('🏦','Säule 3a (Vorsorge)','var(--am)',s3aItems,s3aTot,prevS3a));
+  if(pkItems.length)cont.insertAdjacentHTML('beforeend',mkSection('🏛','Pensionskasse (Säule 2)','var(--vi)',pkItems,pkTot,prevPK));
 }
 function togCat(hd){hd.classList.toggle('open');const b=hd.closest('.widget').querySelector('.cat-body');b.style.maxHeight=hd.classList.contains('open')?'1000px':'0'}
 function togSG(hd){const it=hd.nextElementSibling;it.style.display=it.style.display==='none'?'block':'none'}
@@ -4483,39 +4617,72 @@ function renderAllokationTab(body){
   if(!ms.length){body.innerHTML='<div class="empty"><h3>Noch keine Daten</h3></div>';return;}
   const last=ms[ms.length-1];
   const tLast=getT(last,vw);
-
-  // Asset overview — freie Assets, 3a, PK separat
   const fmtC=n=>fmtN(Math.round(n));
-  const total=tLast.gesamt; // ohne PK
-  const totalMitPK=tLast.gesamtMitPK;
+
+  const free=tLast.cash+tLast.anlagen;
+  const s3a=tLast.s3aTotal||0;
+  const pk=tLast.pkTotal||0;
+  const total=tLast.gesamtMitPK;
+
+  // Stacked treemap-style allocation bar
+  const segments=[
+    {label:'Cash',val:tLast.cash,color:'#60a5fa'},
+    {label:'Anlagen',val:tLast.anlagen,color:'#4ade80'},
+    {label:'3a',val:s3a,color:'#fbbf24'},
+    {label:'PK',val:pk,color:'#a78bfa'},
+  ].filter(s=>s.val>0);
+
+  const segH=segments.map(s=>{
+    const pct=(s.val/total*100).toFixed(1);
+    return `<div style="flex:${pct};background:${s.color};min-width:3px;position:relative;transition:flex 0.4s" title="${s.label}: ${fmt(s.val)} (${pct}%)"></div>`;
+  }).join('');
 
   body.innerHTML=`
-  <!-- Asset-Breakdown -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-    <div style="background:var(--bg3);border-radius:10px;padding:12px 13px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Freie Assets</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--bl)">${fmtC(tLast.cash+tLast.anlagen)}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Cash + Anlagen</div>
+  <!-- Stacked Allocation Bar -->
+  <div style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);margin-bottom:6px;font-family:var(--fm)">
+      <span>Gesamt-Vermögen (inkl. PK)</span>
+      <strong class="blur-val" style="color:var(--tx)">${fmt(total)}</strong>
     </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:12px 13px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Säule 3a</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--am)">${fmtC(tLast.s3aTotal)}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Zugänglich ab ~60</div>
+    <div style="height:28px;border-radius:8px;overflow:hidden;display:flex;gap:2px">${segH}</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+      ${segments.map(s=>`<div style="display:flex;align-items:center;gap:5px">
+        <div style="width:10px;height:10px;border-radius:2px;background:${s.color};flex-shrink:0"></div>
+        <span style="font-size:10px;color:var(--tx2)">${s.label}</span>
+        <span class="blur-val" style="font-family:var(--fm);font-size:10px;color:var(--tx)">${fmt(s.val)}</span>
+        <span style="font-size:9.5px;color:var(--tx3)">${(s.val/total*100).toFixed(0)}%</span>
+      </div>`).join('')}
     </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:12px 13px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">PK (Säule 2)</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--vi)">${fmtC(tLast.pkTotal)}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">Ab ~60 · PK-Rente ~${fmtC(calcPKRente(tLast.pkTotal))}/Mt</div>
-    </div>
+  </div>
+
+  <!-- 3 Asset Tiers -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:10px;font-weight:500;color:var(--tx2);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Verfügbarkeit</div>
+    ${[
+      {label:'Frei verfügbar',desc:'Cash + Depot — jederzeit',val:free,color:'var(--gr)',icon:'✅',
+       sub:`${total>0?(free/total*100).toFixed(0):'0'}% des Gesamtvermögens`},
+      {label:'Gebunden bis ~60',desc:'Säule 3a + PK',val:s3a+pk,color:'var(--am)',icon:'⏳',
+       sub:`Ab ~60 zugänglich · ${total>0?((s3a+pk)/total*100).toFixed(0):'0'}% des Gesamtvermögens`},
+    ].map(tier=>`<div style="display:flex;align-items:center;gap:12px;padding:10px 13px;background:var(--bg3);border-radius:10px;margin-bottom:6px">
+      <span style="font-size:18px">${tier.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11.5px;font-weight:500;color:var(--tx)">${tier.label}</div>
+        <div style="font-size:10px;color:var(--tx3)">${tier.desc}</div>
+        <div style="height:4px;background:var(--bg);border-radius:2px;overflow:hidden;margin-top:6px">
+          <div style="height:100%;width:${total>0?(tier.val/total*100).toFixed(1):'0'}%;background:${tier.color};border-radius:2px"></div>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${tier.color}">${fmt(tier.val)}</div>
+        <div style="font-size:9.5px;color:var(--tx3)">${tier.sub}</div>
+      </div>
+    </div>`).join('')}
   </div>
 
   <!-- Allokationsanalyse aus Positionen -->
   <div id="allok-alloc-body"></div>
-
-  <!-- Trend -->
   <div id="allok-trend-body" style="margin-top:8px"></div>`;
 
-  // Inject allocation analysis
   const allocEl=document.getElementById('allok-alloc-body');
   const trendEl=document.getElementById('allok-trend-body');
   if(allocEl){
@@ -4524,8 +4691,11 @@ function renderAllokationTab(body){
       const trendHTML=buildAllocationTrend(ms.slice(-12),vw);
       if(trendEl)trendEl.innerHTML=trendHTML;
       allocEl.innerHTML=allocSnapshot.html;
+      requestAnimationFrame(()=>renderAllocTrendChart());
     } else {
-      allocEl.innerHTML='<div class="empty" style="margin-top:14px"><p>Keine Positionen erfasst. Unter <strong>Eingabe → Positionen</strong> erfassen.</p></div>';
+      allocEl.innerHTML=`<div style="background:var(--bg3);border-radius:10px;padding:14px 16px;text-align:center;font-size:10.5px;color:var(--tx3)">
+        Keine Positionen erfasst. Unter <strong>Eingabe → Positionen</strong> Wertschriften hinzufügen für detaillierte Asset-Klassen-Analyse.
+      </div>`;
     }
   }
 }
@@ -4554,10 +4724,10 @@ function renderVerlauf(){
   </div>`:'';
 
   let h=hiddenBanner+`<div class="mr mc4">
-    <div class="mc hero"><div class="mc-l">Aktuell</div><div class="mc-v blur-val">${fmt(last.t.gesamt)}</div></div>
+    <div class="mc hero"><div class="mc-l">Vermögen (ohne PK)</div><div class="mc-v blur-val">${fmt(last.t.gesamt)}</div><div class="mc-s mut blur-val">${last.t.pkTotal>0?`inkl. PK: ${fmt(last.t.gesamtMitPK||last.t.gesamt+last.t.pkTotal)}`:''}</div></div>
     <div class="mc"><div class="mc-l">Wachstum</div><div class="mc-v ${diff>=0?'pos':'neg'} blur-val">${diff>=0?'+':''}${fmt(diff)}</div><div class="mc-d ${diff>=0?'pos':'neg'} blur-val">${pct}%</div></div>
     <div class="mc"><div class="mc-l">Ø / Monat</div><div class="mc-v ${avg>=0?'pos':'neg'} blur-val">${avg>=0?'+':''}${fmt(avg)}</div><div class="mc-s mut">über ${mCount} Monate</div></div>
-    <div class="mc"><div class="mc-l">Investiert</div><div class="mc-v blur-val">${fmt(invTot)}</div></div>
+    <div class="mc"><div class="mc-l">Investiert (total)</div><div class="mc-v blur-val">${fmt(invTot)}</div></div>
   </div>
   ${mkWidget('vl-line','Verlauf',`<div class="cwrap" style="height:230px"><canvas id="cv-line" role="img" aria-label="Verlauf">Verlauf</canvas></div><div class="cleg"><div class="cli"><span class="cldot" style="background:#4ade80"></span>${vw==='gesamt'?'Gesamt':vw==='p1'?n1():n2()}</div>${vw==='gesamt'?`<div class="cli"><span class="cldot" style="background:#60a5fa"></span>${n1()}</div><div class="cli"><span class="cldot" style="background:#a78bfa"></span>${n2()}</div>`:''}</div>`)}
   <div class="two-col">
@@ -4574,7 +4744,13 @@ function renderVerlauf(){
   body.innerHTML=h;
   ['vl-line','vl-gain','vl-ca'].forEach(id=>{if(widgetState[id]){const el=document.getElementById('w-'+id);if(el){el.classList.add('collapsed');const t=el.querySelector('.widget-toggle');if(t)t.textContent='▶'}}});
   const labels=months.map(fmtM);
-  dC('vl');const vlEl=document.getElementById('cv-line');if(vlEl){let ds=[{label:'Gesamt',data:vals.map(v=>v.t.gesamt),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.07)',fill:true,tension:0.4,borderWidth:2,pointRadius:3}];if(vw==='gesamt'){ds.push({label:n1(),data:vals.map(v=>v.ich),borderColor:'#60a5fa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]});ds.push({label:n2(),data:vals.map(v=>v.partner),borderColor:'#a78bfa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]})}charts['vl']=new Chart(vlEl.getContext('2d'),{type:'line',data:{labels,datasets:ds},options:cOpts()})}
+  dC('vl');const vlEl=document.getElementById('cv-line');if(vlEl){
+    let ds=[{label:'Gesamt (ohne PK)',data:vals.map(v=>v.t.gesamt),borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.07)',fill:true,tension:0.4,borderWidth:2,pointRadius:3}];
+    if(vw==='gesamt'){
+      ds.push({label:n1(),data:vals.map(v=>v.ich),borderColor:'#60a5fa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]});
+      ds.push({label:n2(),data:vals.map(v=>v.partner),borderColor:'#a78bfa',fill:false,tension:0.4,borderWidth:1.5,pointRadius:2,borderDash:[4,3]});
+    }
+    charts['vl']=new Chart(vlEl.getContext('2d'),{type:'line',data:{labels,datasets:ds},options:{...cOpts(),plugins:{...cOpts().plugins,tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmt(c.raw)}}}}})}
   const gD=vals.map((v,i)=>i===0?0:v.t.gesamt-vals[i-1].t.gesamt);
   dC('gain');const gainEl=document.getElementById('cv-gain');if(gainEl)charts['gain']=new Chart(gainEl.getContext('2d'),{type:'bar',data:{labels,datasets:[{label:'Zuwachs',data:gD,backgroundColor:gD.map(v=>v>=0?'rgba(74,222,128,0.75)':'rgba(248,113,113,0.7)'),borderRadius:3,borderSkipped:false}]},options:cOpts()});
   dC('ca');const caEl=document.getElementById('cv-ca');if(caEl)charts['ca']=new Chart(caEl.getContext('2d'),{type:'bar',data:{labels,datasets:[{label:'Cash',data:vals.map(v=>v.t.cash),backgroundColor:'rgba(251,191,36,0.72)',borderRadius:3,borderSkipped:false},{label:'Anlagen',data:vals.map(v=>v.t.anlagen),backgroundColor:'rgba(74,222,128,0.68)',borderRadius:3,borderSkipped:false}]},options:cOpts(true)});
@@ -4604,9 +4780,10 @@ function renderProjWachstum(){
 
   const baseBox=`<div class="proj-base-box">
     <div class="proj-base-title">Projektionsbasis · ${viewLabel}${lastM?' · '+fmtM(lastM):''}</div>
-    <div class="proj-base-row"><span class="proj-base-lbl"><span style="color:var(--bl)">●</span> Cash — bleibt nominal konstant, verliert real an Kaufkraft</span><span class="proj-base-val blur-val" style="color:var(--bl)">${fmt(lastT.cash)}</span></div>
-    <div class="proj-base-row"><span class="proj-base-lbl"><span style="color:var(--gr)">●</span> Anlagen — werden mit Rendite projiziert + Sparrate</span><span class="proj-base-val blur-val" style="color:var(--gr)">${fmt(lastT.anlagen)}</span></div>
-    <div class="proj-base-row" style="border-top:1px solid var(--bdr);margin-top:5px;padding-top:5px"><span class="proj-base-lbl" style="font-weight:500">Gesamtvermögen heute</span><span class="proj-base-val blur-val" style="font-size:14px">${fmt(lastT.gesamt)}</span></div>
+    <div class="proj-base-row"><span class="proj-base-lbl"><span style="color:var(--gr)">●</span> Anlagen (inkl. 3a) — wachsen mit Rendite + Sparrate eingerechnet</span><span class="proj-base-val blur-val" style="color:var(--gr)">${fmt(lastT.anlagen+(lastT.s3aTotal||0))}</span></div>
+    <div class="proj-base-row"><span class="proj-base-lbl"><span style="color:var(--bl)">●</span> Cash — bleibt konstant (verliert real an Kaufkraft)</span><span class="proj-base-val blur-val" style="color:var(--bl)">${fmt(lastT.cash)}</span></div>
+    ${lastT.pkTotal>0?`<div class="proj-base-row"><span class="proj-base-lbl"><span style="color:var(--vi)">●</span> PK — nicht in Projektion (separat im FIRE-Rechner)</span><span class="proj-base-val blur-val" style="color:var(--vi)">${fmt(lastT.pkTotal)}</span></div>`:''}
+    <div class="proj-base-row" style="border-top:1px solid var(--bdr);margin-top:5px;padding-top:5px"><span class="proj-base-lbl" style="font-weight:500">Projektionsbasis (ohne PK)</span><span class="proj-base-val blur-val" style="font-size:14px">${fmt(lastT.gesamt)}</span></div>
   </div>`;
 
   // Apple-style projection controls: clean inline editable numbers with steppers for discrete values
@@ -4725,7 +4902,7 @@ function calcAndRenderProj(lastT){
   const rGross=rate/100;
   const inf=inflation/100;
   const realR=((1+rNet)/(1+inf))-1;
-  const startAnl=lastT.anlagen+(lastT.s3aTotal||0); // include 3a in "invested" for projection
+  const startAnl=lastT.anlagen+(lastT.s3aTotal||0); // 3a grows too — included in projection
   const startCash=lastT.cash;
   const startTotal=lastT.gesamt; // gesamt = freeAssets incl. 3a, excl. PK
 
@@ -4957,6 +5134,7 @@ function renderRente(){
   }
   const p=rentePerson;const pa=renteParams[p];
   const pName=p==='ich'?n1():n2();
+  const pkSynced=lastM&&(()=>{let pk=0;const e=db[lastM]?.[p]||{};getCats().forEach(g=>g.items.forEach(it=>{if(itemVorsorge(g.id,it.id)==='pk'&&typeof e[it.id]==='number')pk+=e[it.id];}));return pk;})();
 
   // Read VIAC/3a from db (using the last month)
   const viacVal=lastM?(db[lastM]?.[p]?.viac||0):0;
@@ -4965,6 +5143,10 @@ function renderRente(){
   const s3=(pa.s3||viacVal);
 
   body.innerHTML=`
+  ${pkSynced>0?`<div style="background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.18);border-radius:9px;padding:9px 13px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+    <div style="font-size:10.5px;color:var(--tx2)">✅ PK <strong class="blur-val">${fmt(pkSynced)}</strong> automatisch aus Konten-Eingabe übernommen</div>
+    <button onclick="setProjTab('fire');goTo('projektion')" style="background:var(--bg);border:1px solid var(--bdr);border-radius:7px;padding:4px 10px;font-size:10px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">→ FIRE-Rechner öffnen</button>
+  </div>`:''}
   <div class="renten-section">
     <div class="renten-title">Angaben für ${pName}</div>
     <div class="renten-grid">
@@ -7234,7 +7416,7 @@ function renderFireRechner(){
         {label:'Freie Assets (Cash + Depot)',key:'freeAssets',def:def.freeAssets,hint:'Ohne PK & 3a'},
         {label:'Säule 3a heute',key:'s3aAssets',def:def.s3aAssets,hint:`+${fmtC(fp.s3aJahrBeitrag||def.s3aJahrBeitrag)}/J Einzahlung bis FIRE`},
         {label:'Pensionskasse (PK) heute',key:'pkAssets',def:def.pkAssets,hint:`+${fmtC(fp.pkJahrBeitrag||def.pkJahrBeitrag)}/J Beitrag · Rente ~${fmtC(calcPKRente(pkAt60))}/Mt ab 60`},
-        {label:'Sparrate/Mt (ins Depot)',key:'sparrate',def:def.sparrate,hint:`Auto: Haushalt-Ü̈berschuss/2 minus 3a · Rohsparre: ${fmtC(def.sparrateRaw||0)}/Mt`},
+        {label:'Sparrate/Mt (ins freie Depot)',key:'sparrate',def:def.sparrate,hint:`Auto: Haushalt-Überschuss${fp.personFilter?'/2':''} minus 3a-Einzahlung = ${fmtC(def.sparrateRaw||def.sparrate+Math.round((fp.s3aJahrBeitrag||0)/12))}/Mt roh`},
       ].map(f=>`<div>
         <div style="font-size:9.5px;color:var(--tx3);margin-bottom:3px">${f.label}</div>
         <input type="number" value="${fp[f.key]}" min="0" step="1000"
