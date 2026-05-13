@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='39.0.0';
+const APP_VERSION='41.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -6914,8 +6914,6 @@ function getFreeAssetsForPerson(person){
 //  P5: Gesamt-FIRE: beide Personen separat in Zeitstrahl
 // ════════════════════════════════════════════════════════
 
-const MAX_3A_BEITRAG=7258; // 2025 Maximum pro Person
-
 function calcPKRente(pkKapital){
   return Math.round(pkKapital*0.058/12); // 5.8% Umwandlungssatz konservativ
 }
@@ -6953,6 +6951,84 @@ function getFreeAssetsForPerson(person){
   return free;
 }
 
+// ════════════════════════════════════════════════════════
+//  FIRE KERN v40 — Swiss FIRE 2026
+//  Basierend auf: arvy.ch/en/fire-switzerland/ (April 2026)
+//  Korrekturen:
+//  - Entnahmerate 3.5% für lange Horizonte (nicht 4%)
+//  - AHV-Beitrag als Nicht-Erwerbstätiger vermögensabhängig
+//  - AHV-Rente realistisch (nicht Maximalrente)
+//  - 13. AHV-Rente ab 2026 einberechnet
+//  - PK-Zugang ab 58 (nicht immer 60)
+//  - Sequence-of-Returns Risiko im Zeitstrahl
+//  - Bezugsreihenfolge als Hinweis im Zeitstrahl
+// ════════════════════════════════════════════════════════
+
+const MAX_3A_BEITRAG = 7258; // 2025/2026 Maximum pro Person
+
+// PK-Umwandlungssatz: 5.8% konservativ (BVG-Minimum 6.8%, überobligatorisch oft 5–6%)
+function calcPKRente(pkKapital){ return Math.round(pkKapital * 0.058 / 12); }
+
+// AHV-Beitrag als Nicht-Erwerbstätiger (vermögensabhängig, 2026)
+// Quelle: arvy.ch — Schätzung aus offiziellem AHV-Beitragsrechner
+function calcAHVBeitragNichtErwerb(vermögen){
+  if(!vermögen||vermögen<=0) return 530; // Minimum 2026
+  if(vermögen < 500000) return 530;
+  if(vermögen < 1000000) return Math.round(530 + (vermögen-500000) / 500000 * 2000);
+  if(vermögen < 2000000) return Math.round(2530 + (vermögen-1000000) / 1000000 * 5000);
+  if(vermögen < 3000000) return Math.round(7530 + (vermögen-2000000) / 1000000 * 5000);
+  if(vermögen < 5000000) return Math.round(12530 + (vermögen-3000000) / 2000000 * 6000);
+  return Math.min(26500, 18530 + Math.round((vermögen-5000000) / 1000000 * 1500));
+}
+
+// AHV-Rente realistisch — nicht Maximalrente
+// Wer früh aufhört hat tiefes Durchschnittseinkommen → CHF 24'000–28'000/J
+// 13. AHV-Rente ab 2026 eingerechnet (+1/12)
+function calcAHVRenteRealistisch(lohn, alterAustritt, anteilVollJahre){
+  // Vollständige Beitragsjahre: 44 für Max
+  const vollJahre = anteilVollJahre || Math.min(44, Math.max(0, alterAustritt - 22));
+  // Mit frühem Austritt: verbleibende Jahre nur Mindestbeiträge → niedrigeres Durchschnittseinkommen
+  const anteil = Math.min(1, vollJahre / 44);
+  // Maximalrente 2026 inkl. 13. AHV: CHF 2'520 × 13/12 = CHF 2'730/Mt
+  const maxMt = 2730; // inkl. 13. AHV
+  // Realistisch: 75–90% des Anteils (wegen tiefem Durchschnittseinkommen bei FIRE)
+  const realistischFaktor = alterAustritt < 50 ? 0.72 : alterAustritt < 55 ? 0.78 : 0.85;
+  return Math.round(maxMt * anteil * realistischFaktor);
+}
+
+function getPKForPerson(person){
+  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
+  if(!lastM) return renteParams?.[person]?.pk||0;
+  const e=db[lastM]?.[person]||{};
+  let pk=0;
+  getCats().forEach(g=>g.items.forEach(it=>{
+    if(itemVorsorge(g.id,it.id)==='pk' && typeof e[it.id]==='number') pk+=e[it.id];
+  }));
+  return pk>0 ? pk : (renteParams?.[person]?.pk||0);
+}
+
+function get3aForPerson(person){
+  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
+  if(!lastM) return renteParams?.[person]?.s3||0;
+  const e=db[lastM]?.[person]||{};
+  let s3a=0;
+  getCats().forEach(g=>g.items.forEach(it=>{
+    if(itemVorsorge(g.id,it.id)==='s3a' && typeof e[it.id]==='number') s3a+=e[it.id];
+  }));
+  return s3a>0 ? s3a : (renteParams?.[person]?.s3||0);
+}
+
+function getFreeAssetsForPerson(person){
+  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
+  if(!lastM) return 0;
+  const e=db[lastM]?.[person]||{};
+  let free=0;
+  getCats().forEach(g=>g.items.forEach(it=>{
+    if(itemVorsorge(g.id,it.id)==='free' && typeof e[it.id]==='number') free+=e[it.id];
+  }));
+  return free;
+}
+
 function getFireDefaults(personFilter){
   const hh=calcHousehold();
   const bt=budgetTotals();
@@ -6962,120 +7038,125 @@ function getFireDefaults(personFilter){
   const now=new Date().getFullYear();
   const ageIch=settings.birthYear1?now-settings.birthYear1:38;
   const agePartner=settings.birthYear2?now-settings.birthYear2:41;
-  const ahvAlterIch=Math.max(63,renteParams?.ich?.rentenalter||65);
-  const ahvAlterPartner=Math.max(63,renteParams?.partner?.rentenalter||65);
+  // AHV: frühestens 63 (Frühpension), normal 65
+  const ahvAlterIch=Math.max(63, renteParams?.ich?.rentenalter||65);
+  const ahvAlterPartner=Math.max(63, renteParams?.partner?.rentenalter||65);
+  // PK: frühestens 58 (wenn Reglement erlaubt), sonst 60
+  const pkAlterIch=Math.max(58, renteParams?.ich?.pkAlter||60);
+  const pkAlterPartner=Math.max(58, renteParams?.partner?.pkAlter||60);
 
-  // Gesamt-Sparrate
-  const sparrateGesamt=Math.max(0,hh.nettoMonat-ausgabenGesamt);
+  const sparrateGesamt=Math.max(0, hh.nettoMonat-ausgabenGesamt);
 
   if(personFilter==='ich'||personFilter==='partner'){
     const isIch=personFilter==='ich';
     const rp=renteParams?.[personFilter];
     const personAge=isIch?ageIch:agePartner;
     const penAge=isIch?ahvAlterIch:ahvAlterPartner;
+    const pkAlter=isIch?pkAlterIch:pkAlterPartner;
     const ausgaben=Math.round(ausgabenGesamt/2);
-    // P2 FIX: Sparrate pro Person = Gesamt/2
-    const sparrate=Math.max(0,Math.round(sparrateGesamt/2));
+    const sparrate=Math.max(0, Math.round(sparrateGesamt/2));
+    const freeAssets=getFreeAssetsForPerson(personFilter);
+    const s3aHeute=get3aForPerson(personFilter);
+    const pkHeute=getPKForPerson(personFilter);
     const s3aJahrBeitrag=isIch?(income?.saeule3a_i||0):(income?.saeule3a_p||0);
     const pkJahrBeitrag=rp?.pkBeitrag||0;
-    const pkRendite=(rp?.pkRendite||2)/100;
-    const s3aRendite=0.025;
-    const ahvMt=Math.min(2520,Math.max(1200,Math.round((rp?.lohn||60000)*0.0085)));
-    // P1: 3a-Beitrag kommt aus Sparrate (wird abgezogen → freie Sparrate ins Depot)
-    const s3aAusS=Math.min(Math.min(MAX_3A_BEITRAG,s3aJahrBeitrag),sparrate*12);
-    const sparrateFrei=Math.max(0,sparrate-Math.round(s3aAusS/12));
+    const pkRendite=(rp?.pkRendite||1.5)/100; // PK-Rendite oft 1.5–2%
+    const s3aRendite=0.04; // VIAC/Finpension mit Aktien: ~4%
+    const lohn=rp?.lohn||60000;
+    const ahvMt=calcAHVRenteRealistisch(lohn, personAge);
+    const ahvBeitragNE=calcAHVBeitragNichtErwerb(freeAssets+s3aHeute);
+    // Horizont: Frührentner planen für 40+ Jahre → 3.5% statt 4%
+    const fireHorizont=Math.max(0, 90-personAge); // bis 90
+    const entnahmeRate=fireHorizont>=40?3.5:3.75; // arvy-Empfehlung
+    const s3aAusS=Math.min(Math.min(MAX_3A_BEITRAG,s3aJahrBeitrag), sparrate*12);
+    const sparrateFrei=Math.max(0, sparrate-Math.round(s3aAusS/12));
 
     return {
-      personFilter,personAge,
-      age1:personAge,age2:personAge,avgAge:personAge,penAge,
-      freeAssets:Math.max(0,Math.round(getFreeAssetsForPerson(personFilter))),
-      s3aAssets:Math.max(0,Math.round(get3aForPerson(personFilter))),
-      pkAssets:Math.max(0,Math.round(getPKForPerson(personFilter))),
+      personFilter, personAge,
+      age1:personAge, age2:personAge, avgAge:personAge, penAge, pkAlter,
+      freeAssets:Math.max(0,Math.round(freeAssets)),
+      s3aAssets:Math.max(0,Math.round(s3aHeute)),
+      pkAssets:Math.max(0,Math.round(pkHeute)),
       s3aJahrBeitrag:Math.min(MAX_3A_BEITRAG,Math.max(0,s3aJahrBeitrag)),
       pkJahrBeitrag:Math.max(0,pkJahrBeitrag),
-      pkRendite,s3aRendite,
-      sparrate:sparrateFrei,
-      sparrateRaw:sparrate, // vor 3a-Abzug
+      pkRendite, s3aRendite,
+      sparrate:sparrateFrei, sparrateRaw:sparrate,
       ausgaben:Math.max(1000,ausgaben),
       rendite:parseFloat(projParams?.rate)||6,
-      entnahmeRate:4.0,inflation:2.0,
-      zugangAlter:60,
-      ahvMonatPP:ahvMt,ahvJahrTotal:ahvMt*12,
-      ahvNichtErwerbJahr:2000,
+      entnahmeRate, inflation:2.0,
+      zugangAlter3a:60, zugangAlterPK:pkAlter,
+      ahvMonatPP:ahvMt, ahvJahrTotal:ahvMt*12,
+      ahvBeitragNE,
       penName:isIch?n1():n2(),
-      netto1:Math.round((hh.p1?.netto||0)/12),
-      netto2:Math.round((hh.p2?.netto||0)/12),
+      netto1:Math.round((hh.p1?.netto||0)/12), netto2:0,
       p1Pensum:isIch?Math.round(income?.p1?.pensum||80):Math.round(income?.p2?.pensum||80),
       p2Pensum:0,
-      // Per-person detail for timeline display
-      p1name:n1(),p2name:n2(),
+      p1name:n1(), p2name:n2(),
     };
   }
 
   // GESAMT
-  const ms=validMonths('gesamt');const lastM=ms.length?ms[ms.length-1]:null;
-  let freeAssets=0,s3aAssets=0,pkFromCats=0;
+  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
+  let freeAssets=0, s3aAssets=0, pkFromCats=0;
   if(lastM){
     ['ich','partner','kinder'].forEach(p=>{
       const e=db[lastM]?.[p]||{};
       getCats().forEach(g=>g.items.forEach(it=>{
-        const v=e[it.id];if(typeof v!=='number'||v===0)return;
+        const v=e[it.id]; if(typeof v!=='number'||v===0)return;
         const type=itemVorsorge(g.id,it.id);
-        if(type==='s3a')s3aAssets+=v;
-        else if(type==='pk')pkFromCats+=v;
+        if(type==='s3a') s3aAssets+=v;
+        else if(type==='pk') pkFromCats+=v;
         else freeAssets+=v;
       }));
     });
   }
-  const pkAssets=Math.max(pkFromCats,(renteParams?.ich?.pk||0)+(renteParams?.partner?.pk||0));
-  const ausgaben=ausgabenGesamt;
+  const pkAssets=Math.max(pkFromCats, (renteParams?.ich?.pk||0)+(renteParams?.partner?.pk||0));
   const avgAge=Math.round((ageIch+agePartner)/2);
   const penAge=Math.round((ahvAlterIch+ahvAlterPartner)/2);
-  // P5 FIX: Beide 3a separat, je max 7258
-  const s3aJahrI=Math.min(MAX_3A_BEITRAG,income?.saeule3a_i||0);
-  const s3aJahrP=Math.min(MAX_3A_BEITRAG,income?.saeule3a_p||0);
-  const s3aJahrBeitrag=s3aJahrI+s3aJahrP; // z.B. 7258+7258 = 14516
+  const pkAlter=Math.round((pkAlterIch+pkAlterPartner)/2);
+  const s3aJahrI=Math.min(MAX_3A_BEITRAG, income?.saeule3a_i||0);
+  const s3aJahrP=Math.min(MAX_3A_BEITRAG, income?.saeule3a_p||0);
+  const s3aJahrBeitrag=s3aJahrI+s3aJahrP; // bis 14'516/J
   const pkJahrBeitrag=(renteParams?.ich?.pkBeitrag||0)+(renteParams?.partner?.pkBeitrag||0);
-  const pkRenditeI=(renteParams?.ich?.pkRendite||2)/100;
-  const pkRenditeP=(renteParams?.partner?.pkRendite||2)/100;
+  const pkRenditeI=(renteParams?.ich?.pkRendite||1.5)/100;
+  const pkRenditeP=(renteParams?.partner?.pkRendite||1.5)/100;
   const pkRendite=(pkRenditeI+pkRenditeP)/2;
-  const s3aRendite=0.025;
-  const ahvI=Math.min(2520,Math.max(1200,Math.round((renteParams?.ich?.lohn||60000)*0.0085)));
-  const ahvP=Math.min(2520,Math.max(1200,Math.round((renteParams?.partner?.lohn||60000)*0.0085)));
-  // P1 FIX: Gesamt-Sparrate zuerst 3a befüllen (beide Personen), Rest ins Depot
-  const s3aAusS=Math.min(s3aJahrBeitrag,sparrateGesamt*12);
-  const sparrateFrei=Math.max(0,sparrateGesamt-Math.round(s3aAusS/12));
+  const s3aRendite=0.04;
+  const lohnI=renteParams?.ich?.lohn||60000;
+  const lohnP=renteParams?.partner?.lohn||60000;
+  const ahvMtI=calcAHVRenteRealistisch(lohnI, ageIch);
+  const ahvMtP=calcAHVRenteRealistisch(lohnP, agePartner);
+  const ahvJahrTotal=(ahvMtI+ahvMtP)*12;
+  const ahvBeitragNE=calcAHVBeitragNichtErwerb(freeAssets+s3aAssets)*2; // beide Personen
+  const fireHorizont=Math.max(0,90-avgAge);
+  const entnahmeRate=fireHorizont>=40?3.5:3.75;
+  const s3aAusS=Math.min(s3aJahrBeitrag, sparrateGesamt*12);
+  const sparrateFrei=Math.max(0, sparrateGesamt-Math.round(s3aAusS/12));
 
   return {
     personFilter:null,
-    age1:ageIch,age2:agePartner,avgAge,penAge,
-    penAgeI:ahvAlterIch,penAgeP:ahvAlterPartner,
+    age1:ageIch, age2:agePartner, avgAge, penAge, pkAlter,
+    penAgeI:ahvAlterIch, penAgeP:ahvAlterPartner,
+    pkAlterI:pkAlterIch, pkAlterP:pkAlterPartner,
     freeAssets:Math.max(0,Math.round(freeAssets)),
     s3aAssets:Math.max(0,Math.round(s3aAssets)),
     pkAssets:Math.max(0,Math.round(pkAssets)),
-    // Per-person 3a & PK for detailed timeline
     s3aI:Math.max(0,Math.round(get3aForPerson('ich'))),
     s3aP:Math.max(0,Math.round(get3aForPerson('partner'))),
     pkI:Math.max(0,Math.round(getPKForPerson('ich'))),
     pkP:Math.max(0,Math.round(getPKForPerson('partner'))),
-    s3aJahrI,s3aJahrP,
+    s3aJahrI, s3aJahrP, s3aJahrBeitrag,
     pkJahrI:renteParams?.ich?.pkBeitrag||0,
     pkJahrP:renteParams?.partner?.pkBeitrag||0,
-    pkRenditeI,pkRenditeP,
-    s3aJahrBeitrag,pkJahrBeitrag,
-    pkRendite,s3aRendite,
-    sparrate:sparrateFrei,
-    sparrateRaw:sparrateGesamt,
-    ausgaben:Math.max(1000,Math.round(ausgaben)),
+    pkJahrBeitrag, pkRendite, s3aRendite,
+    sparrate:sparrateFrei, sparrateRaw:sparrateGesamt,
+    ausgaben:Math.max(1000,Math.round(ausgabenGesamt)),
     rendite:parseFloat(projParams?.rate)||6,
-    entnahmeRate:4.0,inflation:2.0,
-    zugangAlter:60,
-    ahvMonatI:ahvI,ahvMonatP:ahvP,
-    ahvMonatPP:Math.round((ahvI+ahvP)/2),
-    ahvJahrTotal:Math.round((ahvI+ahvP)*12),
-    ahvNichtErwerbJahr:4000,
-    penName:'Haushalt',
-    p1name:n1(),p2name:n2(),
+    entnahmeRate, inflation:2.0,
+    zugangAlter3a:60, zugangAlterPK:pkAlter,
+    ahvMonatI:ahvMtI, ahvMonatP:ahvMtP, ahvMonatPP:Math.round((ahvMtI+ahvMtP)/2),
+    ahvJahrTotal, ahvBeitragNE,
+    penName:'Haushalt', p1name:n1(), p2name:n2(),
     netto1:Math.round((hh.p1?.netto||0)/12),
     netto2:Math.round((hh.p2?.netto||0)/12),
     p1Pensum:Math.round(income?.p1?.pensum||80),
@@ -7091,70 +7172,86 @@ function calcFireTimeline(fp, overrideSparrate){
   const entnahme=fp.entnahmeRate/100;
   const infl=fp.inflation||2;
   const now=new Date().getFullYear();
-  const jahreBisZugang=Math.max(0,fp.zugangAlter-fp.avgAge);
 
-  // P3: Ausgaben wachsen mit Inflation → FIRE-Ziel wächst ebenfalls
-  function ausgabenInJahr(y){ return fp.ausgaben*Math.pow(1+infl/100,y); }
+  // AHV-Beitrag als Nicht-Erwerbstätiger (laufende Kosten ab FIRE)
+  const ahvBeitragJahr=fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets);
 
-  // Hilfsfunktion: FIRE-Ziel in y Jahren
-  // Ausgaben inflationsbereinigt + PK/3a-Kredit
+  // Ausgaben total inkl. AHV-Beitrag als NE (bis Rentenalter)
+  function ausgabenInJahrMitAHV(y){
+    const alter=fp.avgAge+y;
+    const istRentner=alter>=fp.penAge;
+    const basis=fp.ausgaben*Math.pow(1+infl/100,y);
+    // Vor Rentenalter: AHV-Beitrag als Nicht-Erwerbstätiger dazuzählen
+    const ahv=istRentner?0:ahvBeitragJahr/12;
+    return basis+ahv;
+  }
+
+  // Wachstum PK & 3a bis Zugang MIT Beiträgen
+  const jahreBisZugangPK=Math.max(0, fp.zugangAlterPK-fp.avgAge);
+  const jahreBisZugang3a=Math.max(0, fp.zugangAlter3a-fp.avgAge);
+
+  // FIRE-Ziel: freie Assets müssen Phase 1 überbrücken
   function fireZielAt(y, s3aVal, pkVal){
-    const ausgJ=ausgabenInJahr(y)*12; // inflationsbereinigte Jahresausgaben
-    const restBisZugang=Math.max(0,jahreBisZugang-y);
-    const s3aFuture=s3aVal*Math.pow(1+fp.s3aRendite,restBisZugang);
-    const pkFuture=pkVal*Math.pow(1+fp.pkRendite,restBisZugang);
-    const kredit=(s3aFuture+pkFuture)*0.8;
-    return Math.max(ausgJ*6, ausgJ/entnahme-kredit);
+    const ausgJ=ausgabenInJahrMitAHV(y)*12;
+    const restBisPK=Math.max(0, jahreBisZugangPK-y);
+    const restBis3a=Math.max(0, jahreBisZugang3a-y);
+    const s3aFuture=s3aVal*Math.pow(1+fp.s3aRendite, restBis3a);
+    const pkFuture=pkVal*Math.pow(1+fp.pkRendite, restBisPK);
+    // PK-Rente als Kapitalwert: Rente × 12 × 20 Jahre konservativ
+    const pkKapitalwert=pkFuture*0.8*0.85; // 80% nach Steuern, 85% konservativ
+    const s3aKapitalwert=s3aFuture*0.85; // 85% nach Steuer
+    const kredit=pkKapitalwert+s3aKapitalwert;
+    // Minimum 8× Jahresausgaben (Bridge-Phase-Sicherheit)
+    return Math.max(ausgJ*8, ausgJ/entnahme-kredit);
   }
 
-  // ── Jahres-Simulation ──
-  let wFree=fp.freeAssets,w3a=fp.s3aAssets,wPK=fp.pkAssets;
-  let fireYear=null,fireYrs=null;
-
+  // Simulation jahresweise
+  let wFree=fp.freeAssets, w3a=fp.s3aAssets, wPK=fp.pkAssets;
+  let fireYear=null, fireYrs=null;
   for(let y=0;y<=100;y++){
-    const fireZiel=fireZielAt(y,w3a,wPK);
-    if(wFree>=fireZiel){fireYrs=y;fireYear=now+y;break;}
+    const ziel=fireZielAt(y,w3a,wPK);
+    if(wFree>=ziel){fireYrs=y;fireYear=now+y;break;}
     wFree=wFree*(1+rYear)+sparrate*12;
-    w3a=w3a*(1+fp.s3aRendite)+fp.s3aJahrBeitrag; // 3a mit Beiträgen
-    wPK=wPK*(1+fp.pkRendite)+fp.pkJahrBeitrag;   // PK mit Beiträgen
+    w3a=w3a*(1+fp.s3aRendite)+fp.s3aJahrBeitrag;
+    wPK=wPK*(1+fp.pkRendite)+fp.pkJahrBeitrag;
   }
 
-  // Präziser Wert am FIRE-Datum (monatlich)
+  // Monatsgenaue Berechnung für Endwert
   const nMths=(fireYrs||0)*12;
   const wealthAtFire=fp.freeAssets*Math.pow(1+rMonth,nMths)+
     (rMonth>0?sparrate*((Math.pow(1+rMonth,nMths)-1)/rMonth):sparrate*nMths);
   const entnahmeAtFire=wealthAtFire*entnahme/12;
 
-  // 3a & PK am FIRE-Datum
-  let s3aAtFire=fp.s3aAssets,pkAtFire=fp.pkAssets;
+  // 3a & PK am FIRE-Datum und bei Zugang
+  let s3aAtFire=fp.s3aAssets, pkAtFire=fp.pkAssets;
   for(let y=0;y<(fireYrs||0);y++){
     s3aAtFire=s3aAtFire*(1+fp.s3aRendite)+fp.s3aJahrBeitrag;
     pkAtFire=pkAtFire*(1+fp.pkRendite)+fp.pkJahrBeitrag;
   }
-  // Bei Gesamt: separate Werte pro Person tracken
-  let s3aIAtFire=fp.s3aI||s3aAtFire/2,pkIAtFire=fp.pkI||pkAtFire/2;
-  let s3aPAtFire=fp.s3aP||s3aAtFire/2,pkPAtFire=fp.pkP||pkAtFire/2;
+  const jahreFIREBisPK=Math.max(0,jahreBisZugangPK-(fireYrs||0));
+  const jahreFIREBis3a=Math.max(0,jahreBisZugang3a-(fireYrs||0));
+  const s3aAt60=s3aAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBis3a);
+  const pkAt60=pkAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisPK);
+
+  // Gesamt: per-person tracking
+  let s3aIAtFire=fp.s3aI||s3aAtFire/2, pkIAtFire=fp.pkI||pkAtFire/2;
+  let s3aPAtFire=fp.s3aP||s3aAtFire/2, pkPAtFire=fp.pkP||pkAtFire/2;
   for(let y=0;y<(fireYrs||0);y++){
     s3aIAtFire=s3aIAtFire*(1+fp.s3aRendite)+(fp.s3aJahrI||fp.s3aJahrBeitrag/2);
     pkIAtFire=pkIAtFire*(1+fp.pkRendite)+(fp.pkJahrI||fp.pkJahrBeitrag/2);
     s3aPAtFire=s3aPAtFire*(1+fp.s3aRendite)+(fp.s3aJahrP||fp.s3aJahrBeitrag/2);
     pkPAtFire=pkPAtFire*(1+fp.pkRendite)+(fp.pkJahrP||fp.pkJahrBeitrag/2);
   }
-
-  // 3a & PK bei Zugang (nach FIRE: nur Wachstum)
-  const jahreFIREBisZugang=Math.max(0,jahreBisZugang-(fireYrs||0));
-  const s3aAt60=s3aAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBisZugang);
-  const pkAt60=pkAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisZugang);
-  const s3aIAt60=s3aIAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBisZugang);
-  const pkIAt60=pkIAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisZugang);
-  const s3aPAt60=s3aPAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBisZugang);
-  const pkPAt60=pkPAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisZugang);
+  const s3aIAt60=s3aIAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBis3a);
+  const pkIAt60=pkIAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisPK);
+  const s3aPAt60=s3aPAtFire*Math.pow(1+fp.s3aRendite,jahreFIREBis3a);
+  const pkPAt60=pkPAtFire*Math.pow(1+fp.pkRendite,jahreFIREBisPK);
   const pkRenteMt=calcPKRente(pkAt60);
   const pkRenteIMt=calcPKRente(pkIAt60);
   const pkRentePMt=calcPKRente(pkPAt60);
 
-  // P3: Inflationsbereinigtes Budget
-  const inflAdjAusgaben=fireYrs?ausgabenInJahr(fireYrs):null;
+  // Inflationsbereinigt
+  const inflAdjAusgaben=fireYrs?fp.ausgaben*Math.pow(1+infl/100,fireYrs):null;
   const inflAdjFireZahl=inflAdjAusgaben?inflAdjAusgaben*12/entnahme:null;
 
   const fireZahlFreieAssets=fireZielAt(0,fp.s3aAssets,fp.pkAssets);
@@ -7162,14 +7259,14 @@ function calcFireTimeline(fp, overrideSparrate){
   const pk3aCredit=fireZahlTotal-fireZahlFreieAssets;
   const pctReached=Math.min(100,fp.freeAssets/Math.max(1,fireZahlFreieAssets)*100);
 
-  // Coast FIRE
+  // Coast FIRE (kein Sparen mehr nötig)
   const isCoast=fp.freeAssets>=fireZahlFreieAssets;
-  let coastYear=null,coastYrs=null,coastAge1=null,coastAge2=null;
+  let coastYear=null, coastYrs=null, coastAge1=null, coastAge2=null;
   if(!isCoast){
-    let wC=fp.freeAssets,w3aC=fp.s3aAssets,wPKC=fp.pkAssets;
+    let wC=fp.freeAssets, w3aC=fp.s3aAssets, wPKC=fp.pkAssets;
     for(let y=0;y<=100;y++){
       if(wC>=fireZielAt(y,w3aC,wPKC)){coastYrs=y;coastYear=now+y;break;}
-      wC=wC*(1+rYear); // kein Sparrate
+      wC=wC*(1+rYear);
       w3aC=w3aC*(1+fp.s3aRendite)+fp.s3aJahrBeitrag;
       wPKC=wPKC*(1+fp.pkRendite)+fp.pkJahrBeitrag;
     }
@@ -7180,11 +7277,11 @@ function calcFireTimeline(fp, overrideSparrate){
   }
   const coastRelevant=!isCoast&&coastYear&&(!fireYear||coastYear<fireYear);
 
-  // Partial FIRE
+  // Partial FIRE (Fixkosten = 60%)
   const fixkostenJahr=ausgJahr*0.6;
   const partialFireZahl=fixkostenJahr/entnahme;
   const isPartialFire=fp.freeAssets>=partialFireZahl;
-  let wP=fp.freeAssets,partialYrs=null,partialYear=null;
+  let wP=fp.freeAssets, partialYrs=null, partialYear=null;
   if(!isPartialFire){
     for(let m=0;m<1200;m++){
       wP=wP*(1+rMonth)+sparrate;
@@ -7192,63 +7289,66 @@ function calcFireTimeline(fp, overrideSparrate){
     }
   }
 
-  // P4: Depot-Wert nach FIRE simulieren (Entnahme - Rendite)
+  // Depot nach FIRE (Entnahme - Rendite)
   function depotNachFireJahre(y){
-    if(!wealthAtFire||y<=0)return Math.round(wealthAtFire||fp.freeAssets);
+    if(!wealthAtFire||y<=0) return Math.round(wealthAtFire||fp.freeAssets);
     let w=wealthAtFire;
+    // Ausgaben steigen mit Inflation, sinken wenn AHV/PK einsetzen
     for(let m=0;m<y*12;m++){
-      w=w*(1+rMonth)-entnahmeAtFire;
-      if(w<=0)return 0;
+      const yrOffset=Math.floor(m/12);
+      const ausgM=ausgabenInJahrMitAHV(yrOffset);
+      const alterM=fp.avgAge+(fireYrs||0)+yrOffset;
+      const hasPK=alterM>=fp.zugangAlterPK;
+      const hasAHV=alterM>=fp.penAge;
+      const pkDeckt=hasPK?pkRenteMt:0;
+      const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
+      const eff=Math.max(0,ausgM-pkDeckt-ahvDeckt);
+      w=w*(1+rMonth)-eff;
+      if(w<=0) return 0;
     }
     return Math.round(w);
   }
 
-  // ── Zeitstrahl Events ──
+  // Zeitstrahl Events
   const timeline=[];
   if(isPartialFire||partialYear){
     const yr=isPartialFire?now:partialYear;
-    if(yr){
-      const a1=fp.age1+(yr-now);const a2=fp.personFilter?a1:fp.age2+(yr-now);
-      timeline.push({type:'partial',yr,age1:a1,age2:a2,
-        budgetMt:Math.round(fp.ausgaben*0.6),note:'Fixkosten durch Depot gedeckt'});
-    }
+    if(yr){const a1=fp.age1+(yr-now);const a2=fp.personFilter?a1:fp.age2+(yr-now);
+      timeline.push({type:'partial',yr,age1:a1,age2:a2,budgetMt:Math.round(fp.ausgaben*0.6)});}
   }
   if(coastRelevant&&coastYear){
     timeline.push({type:'coast',yr:coastYear,age1:coastAge1,age2:coastAge2,
-      depotVal:Math.round(fp.freeAssets*Math.pow(1+rYear,coastYrs||0)),
-      note:`Ab hier kein Sparen mehr nötig — Ziel ${fireYear||'?'}`});
+      depotVal:Math.round(fp.freeAssets*Math.pow(1+rYear,coastYrs||0))});
   }
   if(fireYear){
     const a1=fp.age1+(fireYear-now);const a2=fp.personFilter?a1:fp.age2+(fireYear-now);
-    // P3: Zeige ob inflationsbereinigtes Budget höher liegt
-    const inflHinweis=inflAdjAusgaben&&inflAdjAusgaben>fp.ausgaben*1.05
-      ?` (real ${Math.round(inflAdjAusgaben)}/Mt nötig bei ${infl}% Inflation)`:'';
+    // Sequence-of-Returns Puffer berechnen (2–3 Jahresausgaben)
+    const cashPuffer=Math.round(fp.ausgaben*30); // 2.5 Jahre
     timeline.push({type:'fire',yr:fireYear,age1:a1,age2:a2,
       depotVal:Math.round(wealthAtFire||0),
       s3aVal:Math.round(s3aAtFire),pkVal:Math.round(pkAtFire),
       entnahmeMt:Math.round(entnahmeAtFire||0),
       inflEntnahmeMt:Math.round(inflAdjAusgaben||fp.ausgaben),
-      inflHinweis,
-      note:'Vollständige finanzielle Unabhängigkeit'});
+      cashPuffer});
   }
-  // PK & 3a Zugang (~60)
-  const yr60=now+(fp.zugangAlter-fp.avgAge);
-  if(yr60>now){
-    const y60=fp.zugangAlter-fp.avgAge;
-    const a1=fp.age1+y60;const a2=fp.personFilter?a1:fp.age2+y60;
-    const depotAt60=depotNachFireJahre(yr60-(fireYear||now));
-    const isGesamt=!fp.personFilter;
-    timeline.push({type:'pk3a',yr:yr60,age1:a1,age2:a2,
-      depotVal:depotAt60,
-      // Gesamt: per-person breakdown
+  // Bridge-Phase Ende: PK-Zugang
+  const yrPK=now+(fp.zugangAlterPK-fp.avgAge);
+  const yr3a=now+(fp.zugangAlter3a-fp.avgAge);
+  const zugangJahr=Math.min(yrPK,yr3a);
+  if(zugangJahr>now){
+    const yZ=Math.min(fp.zugangAlterPK,fp.zugangAlter3a)-fp.avgAge;
+    const a1=fp.age1+yZ;const a2=fp.personFilter?a1:fp.age2+yZ;
+    const depotAtZ=depotNachFireJahre(zugangJahr-(fireYear||now));
+    const ahvBeitragFire=calcAHVBeitragNichtErwerb(Math.round(wealthAtFire||fp.freeAssets));
+    timeline.push({type:'pk3a',yr:zugangJahr,age1:a1,age2:a2,
+      depotVal:depotAtZ,
       s3aIVal:Math.round(s3aIAt60),pkIVal:Math.round(pkIAt60),pkRenteIMt,
       s3aPVal:Math.round(s3aPAt60),pkPVal:Math.round(pkPAt60),pkRentePMt,
-      // Summen
       s3aVal:Math.round(s3aAt60),pkVal:Math.round(pkAt60),pkRenteMt,
-      isGesamt,
-      note:'Gestaffelt beziehen! Nicht alles im selben Jahr.'});
+      ahvBeitragFire,
+      isGesamt:!fp.personFilter});
   }
-  // AHV
+  // AHV-Rente
   const yrsToAHV=fp.penAge-fp.avgAge;
   const yrAHV=now+yrsToAHV;
   if(yrAHV>now){
@@ -7258,40 +7358,32 @@ function calcFireTimeline(fp, overrideSparrate){
     const ahvMtP=fp.ahvMonatP||fp.ahvMonatPP;
     const ahvGes=fp.ahvJahrTotal/12;
     const depotNachAHV=Math.max(0,(entnahmeAtFire||fp.ausgaben)-ahvGes-pkRenteMt);
-    const totalBudget=Math.round(ahvGes+pkRenteMt+depotNachAHV);
     timeline.push({type:'ahv',yr:yrAHV,age1:a1,age2:a2,
       depotVal:depotAtAHV,
       ahvMtI,ahvMtP,ahvMtGes:Math.round(ahvGes),
       pkRenteMt,pkRenteIMt,pkRentePMt,
       depotNachAHV:Math.round(depotNachAHV),
-      totalBudget,
-      isGesamt:!fp.personFilter,
-      note:'AHV-Rente beginnt — Depot-Entnahme sinkt'});
+      totalBudget:Math.round(ahvGes+pkRenteMt+depotNachAHV),
+      isGesamt:!fp.personFilter});
   }
   timeline.sort((a,b)=>a.yr-b.yr);
 
-  // ── Chart-Serien ──
+  // Chart-Serien
   const chartYears=Math.min(50,Math.max(30,(fireYrs||30)+8));
-  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[];
-  // P4: Depot-Verlauf NACH FIRE weiterführen
-  const seriesDepotNachFire=[];
+  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[],seriesDepotNachFire=[];
   let wN=fp.freeAssets,wO=fp.freeAssets,wPe=fp.freeAssets;
-  let inFIRE=false;
-  let wNachFire=0;
+  let inFIRE=false, wNachFire=0;
   for(let y=0;y<=chartYears;y++){
     const sp=(y<(fireYrs||1000))?sparrate*12:0;
     seriesNominal.push(Math.round(wN));
     seriesReal.push(Math.round(wN/Math.pow(1+infl/100,y)));
     seriesOpt.push(Math.round(wO));
     seriesPess.push(Math.round(wPe));
-    // Depot nach FIRE (Entnahme)
     if(fireYrs!==null&&y>=fireYrs){
       if(!inFIRE){wNachFire=Math.round(wealthAtFire||wN);inFIRE=true;}
       seriesDepotNachFire.push(wNachFire);
       wNachFire=Math.max(0,wNachFire*(1+rYear)-entnahmeAtFire*12);
-    } else {
-      seriesDepotNachFire.push(null);
-    }
+    } else seriesDepotNachFire.push(null);
     if(y<chartYears){
       wN=wN*(1+rYear)+sp;
       wO=wO*(1+rYear+0.02)+sp;
@@ -7299,23 +7391,21 @@ function calcFireTimeline(fp, overrideSparrate){
     }
   }
 
-  // ── Post-FIRE Cashflow ──
+  // Post-FIRE Cashflow
   const cashflowYears=[];
-  const fireYrOff=fireYrs||20;
   for(let y=0;y<=25;y++){
-    const yrCF=now+fireYrOff+y;
-    const ageAtCF=fp.avgAge+fireYrOff+y;
-    const hasPK3a=ageAtCF>=fp.zugangAlter;
+    const yrCF=now+(fireYrs||20)+y;
+    const ageAtCF=fp.avgAge+(fireYrs||20)+y;
+    const hasPK=ageAtCF>=fp.zugangAlterPK;
     const hasAHV=ageAtCF>=fp.penAge;
-    const pkDeckt=hasPK3a?pkRenteMt:0;
-    const s3aDeckt=hasPK3a?(s3aAt60*0.04/12):0;
+    const pkDeckt=hasPK?pkRenteMt:0;
+    const s3aDeckt=hasPK&&!hasAHV?(s3aAt60*0.04/12):0;
     const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
-    const ausgReal=fp.ausgaben*Math.pow(1+infl/100,y); // P3: Ausgaben inflationiert
+    const ausgReal=fp.ausgaben*Math.pow(1+infl/100,y);
     const depotBedarf=Math.max(0,ausgReal-ahvDeckt-pkDeckt-s3aDeckt);
     cashflowYears.push({yr:yrCF,age:Math.round(ageAtCF),
       depot:Math.round(depotBedarf),s3a:Math.round(s3aDeckt),
-      pk:Math.round(pkDeckt),ahv:Math.round(ahvDeckt),
-      total:Math.round(ausgReal)});
+      pk:Math.round(pkDeckt),ahv:Math.round(ahvDeckt),total:Math.round(ausgReal)});
   }
 
   return{
@@ -7326,7 +7416,7 @@ function calcFireTimeline(fp, overrideSparrate){
     fireAge1:fireYear?fp.age1+(fireYear-now):null,
     fireAge2:fp.personFilter?null:(fireYear?fp.age2+(fireYear-now):null),
     wealthAtFire:Math.round(wealthAtFire||0),entnahmeAtFire:Math.round(entnahmeAtFire||0),
-    inflAdjAusgaben,inflAdjFireZahl,
+    inflAdjAusgaben,inflAdjFireZahl,ahvBeitragJahr,
     isCoast,coastYear,coastYrs,coastAge1,coastAge2,coastRelevant,
     isPartialFire,partialFireZahl,partialYear,partialYrs,
     pctReached,fixkostenMt:Math.round(fp.ausgaben*0.6),
@@ -7341,6 +7431,8 @@ function calcFireTimeline(fp, overrideSparrate){
 // ── FIRE per-person toggle state ──
 let firePersonView='gesamt';
 let fireParamsIch=null,fireParamsPartner=null;
+// Barista FIRE pensum state (per view)
+let baristaParams={gesamt:{p1:20,p2:0},ich:{p1:20},partner:{p2:20}};
 
 function setFirePerson(p){
   firePersonView=p;
@@ -7374,7 +7466,7 @@ function renderFireRechner(){
     fireZahlFreieAssets, pk3aCredit, s3aAt60, pkAt60, pkRenteMt,
     s3aAtFire, pkAtFire, pkRenteIMt, pkRentePMt,
     yrs, fireYear, fireAge1, fireAge2,
-    inflAdjFireZahl, inflAdjAusgaben,
+    inflAdjFireZahl, inflAdjAusgaben, ahvBeitragJahr,
     isCoast, coastYrs, coastYear, coastAge1, coastAge2, coastRelevant,
     isPartialFire, partialFireZahl, partialYear, partialYrs,
     pctReached, wealthAtFire, entnahmeAtFire,
@@ -7413,8 +7505,8 @@ function renderFireRechner(){
       <div style="flex:1;height:1px;background:var(--bdr)"></div>
     </div>
 
-    <!-- 3 Status Cards -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+    <!-- 4 Status Cards -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       <div style="background:var(--bg3);border-radius:11px;padding:12px 14px;border-left:3px solid ${yrs?'var(--gr)':'var(--rd)'}">
         <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">🔥 FIRE</div>
         <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${yrs?'var(--gr)':'var(--rd)'}">${fireYear||'> 100 J.'}</div>
@@ -7431,6 +7523,20 @@ function renderFireRechner(){
         <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${isCoast?'var(--gr)':'var(--bl)'}">${coastLabel}</div>
         <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">${isCoast?'Kein Sparen mehr nötig':'Ab dann kein Sparen mehr nötig'}</div>
       </div>
+      <!-- Barista FIRE Preview Card -->
+      ${(()=>{
+        const bp20=baristaParams[firePersonView]||{p1:20,p2:0};
+        const bSim=calcBaristaScenario(fp,bp20.p1||0,isPerson?0:(bp20.p2||0));
+        const bYear=bSim.fireCalc.fireYear;
+        const bYrs=bSim.fireCalc.yrs;
+        const deltaYrs=yrs&&bYrs?(yrs-bYrs):null;
+        return `<div style="background:rgba(251,191,36,0.07);border-radius:11px;padding:12px 14px;border-left:3px solid var(--am);cursor:pointer" onclick="document.getElementById('fire-barista-body')?.scrollIntoView({behavior:'smooth'})">
+          <div style="font-size:9px;color:var(--am);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">☕ Barista FIRE</div>
+          <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${bYear?'var(--am)':'var(--rd)'}">${bYear||'> 100 J.'}</div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">${isPerson?`${fp.penName||n1()} ${bp20.p1||0}% Pensum`:`${n1()} ${bp20.p1||0}% · ${n2()} ${bp20.p2||0}%`}</div>
+          ${deltaYrs?`<div style="font-size:9px;color:var(--am);margin-top:2px">${deltaYrs>0?deltaYrs+' J. früher als FIRE':deltaYrs<0?(-deltaYrs)+' J. später':''} · ${bSim.ahvBeideGedeckt?'✅ AHV gedeckt':'⚠ AHV prüfen'}</div>`:''}
+        </div>`;
+      })()}
     </div>
 
     <!-- Progress to FIRE -->
@@ -7461,7 +7567,7 @@ function renderFireRechner(){
     <div style="display:flex;flex-direction:column;gap:5px">
       ${[
         {icon:'🔥',term:'FIRE — Financial Independence, Retire Early',color:'var(--rd)',ok:!!yrs,
-         short:`Freie Assets Ziel: <strong>${fmtC(fireZahlFreieAssets)}</strong> · Ab ~60 kommen PK+3a (~${fmtC(pkAt60)}) dazu · Ab ${fp.penAge} AHV (~${fmtC(fp.ahvJahrTotal/12)}/Mt)`},
+         short:`Ziel: freie Assets von <strong>${fmtC(fireZahlFreieAssets)}</strong> · Bei ${fp.entnahmeRate}% Entnahmerate für ~${Math.round(90-fp.avgAge)} Jahre (arvy: 3.5% für 40+ Jahre) · Ab ~${fp.zugangAlterPK} kommen PK+3a (~${fmtC(pkAt60)}) dazu · Ab ${fp.penAge} AHV (~${fmtC(fp.ahvJahrTotal/12)}/Mt inkl. 13. AHV)`},
         {icon:'🌊',term:'Coast FIRE — ab jetzt kein Sparen mehr nötig',color:'var(--bl)',ok:isCoast,
          short:isCoast?`Dein Depot wächst alleine zum FIRE-Ziel. Du musst nur noch die laufenden Ausgaben verdienen.`
            :coastRelevant&&coastYear?`Ab ${coastYear} wächst dein Depot allein zum FIRE-Ziel ${fireYear||'?'}.`
@@ -7543,9 +7649,26 @@ function renderFireRechner(){
             onchange="setActiveFireParam('${s.key}',+this.value);renderFireRechner()">
         </div>`).join('')}
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid var(--bdr);font-size:10px;color:var(--tx3)">
-        <span>💡</span>
-        <span>3a-Beitrag (<strong>${fmtC(fp.s3aJahrBeitrag||def.s3aJahrBeitrag||0)}/J</strong>) wird zuerst aus der Sparrate gedeckt — Rest geht ins freie Depot. Steuerlich optimal.</span>
+      <!-- Entnahmerate & AHV-Beitrag Info -->
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--bdr)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div style="font-size:9.5px;color:var(--tx2)">
+            Entnahmerate: <strong style="color:${fp.entnahmeRate<=3.5?'var(--gr)':'var(--am)'}">${fp.entnahmeRate}%</strong>
+            <span style="color:var(--tx3)"> · ${fp.entnahmeRate<=3.5?'✓ Für 40+ Jahre geeignet':'⚠ 3.5% empfohlen für Horizont '+Math.round(90-fp.avgAge)+' Jahre'}</span>
+          </div>
+          <div style="display:flex;gap:6px">
+            ${[3,3.5,4].map(r=>`<button onclick="setActiveFireParam('entnahmeRate',${r});renderFireRechner()"
+              style="padding:3px 8px;border-radius:5px;font-size:9.5px;font-family:var(--fb);cursor:pointer;
+              background:${fp.entnahmeRate===r?'var(--bl)':'var(--bg)'};color:${fp.entnahmeRate===r?'#fff':'var(--tx2)'};
+              border:1px solid ${fp.entnahmeRate===r?'var(--bl)':'var(--bdr)'}">${r}%</button>`).join('')}
+          </div>
+        </div>
+        ${ahvBeitragJahr>0?`<div style="font-size:9.5px;color:var(--am);margin-top:6px">
+          ⚠ AHV als Nicht-Erwerbstätiger: ~${fmtC(ahvBeitragJahr)}/J. (vermögensabhängig) — in Ausgaben noch nicht enthalten!
+        </div>`:''}
+        <div style="font-size:9px;color:var(--tx3);margin-top:4px">
+          💡 3a-Beitrag (${fmtC(fp.s3aJahrBeitrag||def.s3aJahrBeitrag||0)}/J) wird zuerst aus der Sparrate gedeckt — Rest ins freie Depot.
+        </div>
       </div>
     </div>
   </div>
@@ -7586,10 +7709,20 @@ function renderFireRechner(){
         let details='';
         if(ev.type==='partial')details=`Budget für Fixkosten: <strong class="blur-val">${fmtC(ev.budgetMt)}/Mt</strong> — minimal arbeiten reicht`;
         else if(ev.type==='coast')details=`Depot: <strong class="blur-val">${fmtC(ev.depotVal)}</strong> — ab hier kein weiteres Sparen nötig`;
-        else if(ev.type==='fire')details=`Depot: <strong class="blur-val">${fmtC(ev.depotVal)}</strong> · Entnahme: <strong class="blur-val">${fmtC(ev.entnahmeMt)}/Mt</strong> · Real (${infl}% Inflation): <strong class="blur-val">${fmtC(ev.inflEntnahmeMt)}/Mt</strong> nötig · 3a: <strong class="blur-val">${fmtC(ev.s3aVal)}</strong> · PK: <strong class="blur-val">${fmtC(ev.pkVal)}</strong>`;
+        else if(ev.type==='fire')details=`Depot: <strong class="blur-val">${fmtC(ev.depotVal)}</strong> · Entnahme: <strong class="blur-val">${fmtC(ev.entnahmeMt)}/Mt</strong> (${fp.entnahmeRate}%)`
+          +`<br>Real-Bedarf bei ${infl}% Inflation: <strong class="blur-val">${fmtC(ev.inflEntnahmeMt)}/Mt</strong>`
+          +`<br>3a: <strong class="blur-val">${fmtC(ev.s3aVal)}</strong> · PK: <strong class="blur-val">${fmtC(ev.pkVal)}</strong>`
+          +`<br><span style="color:var(--am);font-size:9.5px">🛡 Sequence-of-Returns: Cash-Puffer ~${fmtC(ev.cashPuffer)} empfohlen (2–3 Jahresausgaben)</span>`;
         else if(ev.type==='pk3a'){
-          if(ev.isGesamt)details=`${fp.p1name}: 3a <strong class="blur-val">${fmtC(ev.s3aIVal)}</strong> · PK <strong class="blur-val">${fmtC(ev.pkIVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRenteIMt)}/Mt</strong><br>${fp.p2name}: 3a <strong class="blur-val">${fmtC(ev.s3aPVal)}</strong> · PK <strong class="blur-val">${fmtC(ev.pkPVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRentePMt)}/Mt</strong><br><em style="color:var(--am);font-size:9.5px">⚠ Gestaffelt beziehen — nicht alles im gleichen Steuerjahr!</em>`;
-          else details=`3a: <strong class="blur-val">${fmtC(ev.s3aVal)}</strong> · PK: <strong class="blur-val">${fmtC(ev.pkVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRenteMt)}/Mt</strong> (lebenslang)<br><em style="color:var(--am);font-size:9.5px">⚠ Gestaffelt beziehen!</em>`;
+          // Bezugsreihenfolge: max. 3 Teilbezüge PK über 3 Jahre
+          const bezugsJahre=ev.yr;
+          if(ev.isGesamt)details=`Depot: <strong class="blur-val">${fmtC(ev.depotVal)}</strong>`
+            +`<br>${fp.p1name}: 3a <strong class="blur-val">${fmtC(ev.s3aIVal)}</strong> · PK <strong class="blur-val">${fmtC(ev.pkIVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRenteIMt)}/Mt</strong>`
+            +`<br>${fp.p2name}: 3a <strong class="blur-val">${fmtC(ev.s3aPVal)}</strong> · PK <strong class="blur-val">${fmtC(ev.pkPVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRentePMt)}/Mt</strong>`
+            +`<br><span style="color:var(--am);font-size:9.5px">⚠ Bezugsreihenfolge: 3a#1 (${bezugsJahre}), PK (${bezugsJahre+1}), 3a#2 (${bezugsJahre+2}), 3a#3 (${bezugsJahre+3}) — nie im gleichen Steuerjahr! Max. 3 PK-Tranchen (Art. 13a BVG)</span>`;
+          else details=`Depot: <strong class="blur-val">${fmtC(ev.depotVal)}</strong>`
+            +` · 3a: <strong class="blur-val">${fmtC(ev.s3aVal)}</strong> · PK: <strong class="blur-val">${fmtC(ev.pkVal)}</strong> → Rente ~<strong class="blur-val">${fmtC(ev.pkRenteMt)}/Mt</strong>`
+            +`<br><span style="color:var(--am);font-size:9.5px">⚠ Gestaffelt über min. 3 Jahre beziehen! 3-Jahres-Sperrfrist für PK-Einkäufe (Art. 79b BVG) beachten.</span>`;
         }
         else if(ev.type==='ahv'){
           if(ev.isGesamt)details=`AHV ${fp.p1name}: <strong class="blur-val">${fmtC(ev.ahvMtI)}/Mt</strong> · PK-Rente: <strong class="blur-val">${fmtC(ev.pkRenteIMt)}/Mt</strong><br>AHV ${fp.p2name}: <strong class="blur-val">${fmtC(ev.ahvMtP)}/Mt</strong> · PK-Rente: <strong class="blur-val">${fmtC(ev.pkRentePMt)}/Mt</strong><br>Depot-Entnahme sinkt auf ~<strong class="blur-val">${fmtC(ev.depotNachAHV)}/Mt</strong> · <strong>Gesamtbudget: <span class="blur-val">${fmtC(ev.totalBudget)}/Mt</span></strong>`;
@@ -7672,22 +7805,30 @@ function renderFireRechner(){
       ${inflAdjFireZahl?`Inflationsbereinigte FIRE-Zahl: <strong class="blur-val">${fmtC(inflAdjFireZahl)}</strong>.`:''}
     </div>
 
-    <!-- CH Warning -->
-    <div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
-      🇨🇭 <strong>Schweiz-Achtung:</strong> Als Nicht-Erwerbstätige AHV-Beiträge ~${fmtC(fp.ahvNichtErwerbJahr)}/J. bis 65. <strong>Barista FIRE</strong> (min. CHF 10k/J. Einkommen) deckt AHV automatisch und ist steuerlich deutlich vorteilhafter.
+    <!-- CH Warnings (verified 2026) -->
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+        🇨🇭 <strong>AHV als Nicht-Erwerbstätiger (2026):</strong> Beitrag vermögensabhängig — ~${fmtC(ahvBeitragJahr||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J für dein aktuelles Vermögen (Min. CHF 530, Max. CHF 26'500). <strong>Barista FIRE</strong>: Partner bleibt mind. 20–40% tätig → AHV für beide gedeckt, kein eigener Beitrag nötig.
+      </div>
+      <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+        🛡 <strong>Sequence-of-Returns Risiko:</strong> Ein Crash in den ersten 3–5 Jahren nach FIRE kann den Plan dauerhaft beschädigen. Empfehlung: Cash-Puffer von 2–3 Jahresausgaben (~${fmtC(fp.ausgaben*30)}) in Cash/Obligationen, damit du in Krisenzeiten nicht verkaufen musst.
+      </div>
+      <div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
+        📋 <strong>Bezugsreihenfolge PK & 3a:</strong> Nie PK, 3a und Freizügigkeit im gleichen Steuerjahr beziehen — alles wird zusammengezählt, die Progression explodiert. Max. 3 PK-Tranchen über 3 Kalenderjahre (Art. 13a BVG). PK-Einkäufe 3 Jahre vor Bezug stoppen (Art. 79b BVG Sperrfrist).
+      </div>
     </div>
   </div>
 
-  <!-- Pensum Simulator (nur Gesamt) -->
-  ${!isPerson?`<div style="margin-bottom:20px">
+  <!-- ☕ Barista FIRE (alle Views) -->
+  <div style="margin-bottom:20px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-      <div style="font-size:13px;font-weight:600;color:var(--tx)">Pensum-Simulation</div>
+      <div style="font-size:13px;font-weight:600;color:var(--tx)">☕ Barista FIRE — Pensum-Simulation</div>
       <div style="flex:1;height:1px;background:var(--bdr)"></div>
     </div>
-    <div class="widget"><div class="widget-body" id="fire-pensum-body"></div></div>
-  </div>`:''}`;
+    <div class="widget"><div class="widget-body" id="fire-barista-body"></div></div>
+  </div>`;
 
-  if(!isPerson) renderPensumSim();
+  renderBaristaFire();
 
   requestAnimationFrame(()=>{
     // Growth chart
@@ -7740,94 +7881,159 @@ function renderFireRechner(){
 }
 
 
-function renderPensumSim(){
-  const body=document.getElementById('fire-pensum-body');
+
+// ── Barista FIRE helper ──
+// Berechnet FIRE-Szenario mit reduziertem Pensum
+// Gibt: {nettoMt, sparrate, fireCalc, ahvGedeckt, ahvErsparnis}
+function calcBaristaScenario(fp, p1Pensum, p2Pensum){
+  // Scale netto linearly with pensum change
+  const netto1New=fp.p1Pensum>0?fp.netto1*(p1Pensum/fp.p1Pensum):0;
+  const netto2New=fp.p2Pensum>0?fp.netto2*(p2Pensum/fp.p2Pensum):0;
+  const nettoNew=netto1New+netto2New;
+  const ueb=nettoNew-fp.ausgaben;
+  const spNew=Math.max(0,ueb);
+
+  // AHV gedeckt wenn mind. einer ein Einkommen > ~CHF 10k/J hat
+  // oder wenn Einkommen des Partners mind. CHF 1'060/J AHV (ca. CHF 11k Lohn)
+  const lohn1Jahr=netto1New*12*1.25; // grob brutto
+  const lohn2Jahr=netto2New*12*1.25;
+  const ahv1Gedeckt=p1Pensum>0&&lohn1Jahr>10000;
+  const ahv2Gedeckt=p2Pensum>0&&lohn2Jahr>10000;
+  // Wenn einer ≥ doppelter Mindestbeitrag: beide gedeckt
+  const ahvBeideGedeckt=ahv1Gedeckt||ahv2Gedeckt;
+
+  // AHV-Ersparnis vs. komplett aufhören
+  const ahvBeitragOhne=fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets);
+  const ahvErsparnis=ahvBeideGedeckt?ahvBeitragOhne:0;
+
+  // FIRE-Berechnung mit neuer Sparrate
+  const fireCalc=calcFireTimeline(fp, spNew);
+
+  return {netto1New,netto2New,nettoNew,ueb,spNew,
+    ahv1Gedeckt,ahv2Gedeckt,ahvBeideGedeckt,ahvErsparnis,fireCalc};
+}
+
+function renderBaristaFire(){
+  const body=document.getElementById('fire-barista-body');
   if(!body)return;
   const fp=getActiveFireParams();
   const fmtC=n=>fmtN(Math.round(n));
+  const isPerson=!!fp.personFilter;
+  const view=firePersonView;
 
-  const p1Cur=fp._simP1!==undefined?fp._simP1:fp.p1Pensum;
-  const p2Cur=fp._simP2!==undefined?fp._simP2:fp.p2Pensum;
+  // Current barista params for this view
+  const bp=baristaParams[view]||{p1:20,p2:0};
+  const p1Cur=bp.p1!==undefined?bp.p1:(isPerson?20:20);
+  const p2Cur=bp.p2!==undefined?bp.p2:(isPerson?0:0);
 
-  // Scale netto linearly with pensum
-  const netto1Sim=fp.p1Pensum>0?fp.netto1*(p1Cur/fp.p1Pensum):0;
-  const netto2Sim=fp.p2Pensum>0?fp.netto2*(p2Cur/fp.p2Pensum):0;
-  const nettoSim=netto1Sim+netto2Sim;
-  const uebSim=nettoSim-fp.ausgaben;
-  const spSim=Math.max(0,uebSim);
+  // Calculate full FIRE (no work) for comparison
+  const fullCalc=calcFireTimeline(fp, fp.sparrate);
 
-  // FIRE timeline with new sparrate
-  const simCalc=calcFireTimeline(fp, spSim);
+  // Calculate Barista scenario
+  const b=calcBaristaScenario(fp, p1Cur, isPerson?0:p2Cur);
 
-  const stopped1=p1Cur===0, stopped2=p2Cur===0;
-  const barista=(p1Cur>0&&income?.p1?.lohn100>0&&fp.netto1*(p1Cur/fp.p1Pensum)*12>10000)||
-                (p2Cur>0&&income?.p2?.lohn100>0&&fp.netto2*(p2Cur/fp.p2Pensum)*12>10000);
+  // Delta vs full FIRE
+  const deltaYrs=fullCalc.yrs&&b.fireCalc.yrs?(fullCalc.yrs-b.fireCalc.yrs):null;
+  const isBaristaBetter=deltaYrs&&deltaYrs>0;
+
+  // AHV-Rente impact: wenn man weniger arbeitet → niedrigere AHV
+  // Vereinfachung: wir zeigen nur ob gedeckt oder nicht
+  const pkCoverageNote=b.ahvBeideGedeckt
+    ?`✅ AHV gedeckt — kein Beitrag als Nicht-Erwerbstätiger (spart ~${fmtC(b.ahvErsparnis)}/J)`
+    :`⚠ AHV nicht gedeckt — ~${fmtC(fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J als Nicht-Erwerbstätiger`;
+
+  // Quick presets
+  const presets=isPerson
+    ?[{l:'10%',v:10},{l:'20%',v:20},{l:'30%',v:30},{l:'40%',v:40},{l:'0% (Vollausstieg)',v:0}]
+    :[{l:'Einer 20%',p1:20,p2:0},{l:'Einer 40%',p1:40,p2:0},{l:'Beide 20%',p1:20,p2:20},
+      {l:'Beide 40%',p1:40,p2:40},{l:'Vollausstieg',p1:0,p2:0}];
 
   body.innerHTML=`
-  <!-- Quick buttons -->
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-    ${[
-      {l:`${n1()} hört auf`,p1:0,p2:fp.p2Pensum},
-      {l:`${n2()} hört auf`,p1:fp.p1Pensum,p2:0},
-      {l:'Beide 60%',p1:60,p2:60},
-      {l:'Beide 50%',p1:50,p2:50},
-      {l:'Reset',p1:fp.p1Pensum,p2:fp.p2Pensum},
-    ].map(b=>`<button onclick="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=${b.p1};fireParams._simP2=${b.p2};renderPensumSim()"
-      style="background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">${b.l}</button>`).join('')}
+  <!-- Erklärung -->
+  <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;margin-bottom:12px;font-size:10.5px;color:var(--tx2);line-height:1.55">
+    ☕ <strong>Barista FIRE</strong>: Wie verändert sich dein FIRE-Datum wenn du noch etwas weiterarbeitest? In CH besonders wertvoll: schon 20% Pensum (ca. CHF 10k/J Einkommen) deckt die AHV für beide.
+  </div>
+
+  <!-- Quick Presets -->
+  <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">
+    ${presets.map(b=>{
+      const isActive=isPerson?(p1Cur===(b.v||0)):(p1Cur===(b.p1||0)&&p2Cur===(b.p2||0));
+      return `<button onclick="baristaParams['${view}']=${isPerson?`{p1:${b.v||0}}`:`{p1:${b.p1||0},p2:${b.p2||0}}`};renderBaristaFire()"
+        style="padding:5px 10px;border-radius:7px;font-size:10px;font-family:var(--fb);cursor:pointer;
+        background:${isActive?'var(--am)':'var(--bg3)'};color:${isActive?'#000':'var(--tx2)'};
+        border:1px solid ${isActive?'var(--am)':'var(--bdr)'}">${b.l}</button>`;
+    }).join('')}
   </div>
 
   <!-- Sliders -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+  <div style="display:grid;grid-template-columns:${isPerson?'1fr':'1fr 1fr'};gap:12px;margin-bottom:14px">
     <div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-        <span>${n1()}</span>
-        <strong style="color:var(--tx);font-family:var(--fm)">${p1Cur}%</strong>
+        <span>${isPerson?(fp.penName||n1()):(n1())}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <strong style="color:var(--tx);font-family:var(--fm)">${p1Cur}%</strong>
+          <span style="font-size:9.5px;color:var(--tx3)">Netto ~${fmtC(b.netto1New)}/Mt</span>
+        </div>
       </div>
-      <input type="range" min="0" max="100" step="10" value="${p1Cur}"
-        oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP1=+this.value;renderPensumSim()">
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px;font-family:var(--fm)">Netto ~${fmtC(netto1Sim)}/Mt</div>
+      <input type="range" min="0" max="80" step="10" value="${p1Cur}"
+        oninput="baristaParams['${view}']={...baristaParams['${view}'],p1:+this.value};renderBaristaFire()">
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);margin-top:2px">
+        <span>0% (Vollausstieg)</span><span>80%</span>
+      </div>
     </div>
-    <div>
+    ${!isPerson?`<div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
         <span>${n2()}</span>
-        <strong style="color:var(--tx);font-family:var(--fm)">${p2Cur}%</strong>
+        <div style="display:flex;align-items:center;gap:6px">
+          <strong style="color:var(--tx);font-family:var(--fm)">${p2Cur}%</strong>
+          <span style="font-size:9.5px;color:var(--tx3)">Netto ~${fmtC(b.netto2New)}/Mt</span>
+        </div>
       </div>
-      <input type="range" min="0" max="100" step="10" value="${p2Cur}"
-        oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._simP2=+this.value;renderPensumSim()">
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px;font-family:var(--fm)">Netto ~${fmtC(netto2Sim)}/Mt</div>
-    </div>
+      <input type="range" min="0" max="80" step="10" value="${p2Cur}"
+        oninput="baristaParams['${view}']={...baristaParams['${view}'],p2:+this.value};renderBaristaFire()">
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);margin-top:2px">
+        <span>0%</span><span>80%</span>
+      </div>
+    </div>`:''}
   </div>
 
-  <!-- Result grid -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
+  <!-- Ergebnis Grid -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
       <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Haushalt-Netto</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(nettoSim)}/Mt</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(b.nettoNew)}/Mt</div>
+      <div style="font-size:9.5px;color:${b.ueb>=0?'var(--gr)':'var(--rd)'};margin-top:2px;font-family:var(--fm)" class="blur-val">${b.ueb>=0?'+':''}${fmtC(b.ueb)}/Mt Überschuss</div>
     </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Überschuss / Defizit</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:${uebSim>=0?'var(--gr)':'var(--rd)'}">${uebSim>=0?'+':''}${fmtC(uebSim)}/Mt</div>
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Sparrate (nach 3a)</div>
+      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(b.spNew)}/Mt</div>
     </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">FIRE-Datum</div>
-      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:${simCalc.fireYear?'var(--gr)':'var(--rd)'}">${simCalc.fireYear||'> 100 J.'}</div>
+    <div style="background:${b.fireCalc.fireYear?'rgba(74,222,128,0.07)':'rgba(248,113,113,0.07)'};border-radius:10px;padding:11px 13px;border-left:3px solid ${b.fireCalc.fireYear?'var(--gr)':'var(--rd)'}">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">☕ Barista FIRE</div>
+      <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${b.fireCalc.fireYear?'var(--gr)':'var(--rd)'}">${b.fireCalc.fireYear||'> 100 J.'}</div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${b.fireCalc.yrs?`In ${b.fireCalc.yrs} J.`:''}</div>
     </div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">In Jahren</div>
-      <div style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${simCalc.yrs?simCalc.yrs+' J.':'—'}</div>
+    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px;border-left:3px solid ${isBaristaBetter?'var(--am)':'var(--bdr)'}">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">vs. Vollausstieg</div>
+      <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${isBaristaBetter?'var(--am)':'var(--tx3)'}">
+        ${deltaYrs===null?'—':deltaYrs>0?`${deltaYrs} J. früher`:deltaYrs<0?`${-deltaYrs} J. später`:'Gleich'}
+      </div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">FIRE ${fullCalc.fireYear||'?'} ohne Pensum</div>
     </div>
   </div>
 
-  ${uebSim<0?`<div style="padding:9px 12px;background:rgba(248,113,113,0.08);border-radius:8px;font-size:10.5px;color:var(--tx2);margin-bottom:8px">
-    ⚠ Defizit von ${fmtC(-uebSim)}/Mt — das Vermögen wird langsam verbraucht statt aufgebaut.
-  </div>`:''}
-  ${simCalc.isPartialFire?`<div style="padding:9px 12px;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;font-size:10.5px;color:var(--tx2);margin-bottom:8px">
-    ☕ <strong>Partial FIRE möglich!</strong> Das Depot deckt bereits mehr als die Fixkosten. Ihr müsst nur noch ${fmtC(fp.ausgaben*0.6)}/Mt verdienen — also rund ${fmtC(fp.ausgaben*0.6/2)}/Mt pro Person.
-  </div>`:''}
-  ${(stopped1||stopped2)&&!barista?`<div style="padding:9px 12px;background:rgba(248,113,113,0.07);border:1px solid rgba(248,113,113,0.18);border-radius:8px;font-size:10.5px;color:var(--tx2)">
-    ⚠ <strong>CH-Hinweis:</strong> Bei 0% Pensum fallen AHV-Beiträge als Nicht-Erwerbstätiger an (~${fmtC(fp.ahvNichtErwerbJahr)}/J). Barista FIRE (min. CHF 10k Einkommen/Jahr) vermeidet das.
+  <!-- AHV Status -->
+  <div style="padding:9px 12px;background:${b.ahvBeideGedeckt?'rgba(74,222,128,0.07)':'rgba(251,191,36,0.07)'};border:1px solid ${b.ahvBeideGedeckt?'rgba(74,222,128,0.2)':'rgba(251,191,36,0.25)'};border-radius:8px;font-size:10.5px;color:var(--tx2);line-height:1.55;margin-bottom:10px">
+    ${pkCoverageNote}
+    ${b.ahvBeideGedeckt?`<br><span style="font-size:9.5px;color:var(--tx3)">Tipp: Wer min. CHF 10k/J verdient deckt AHV für sich (und bei Ehe für den Partner).</span>`:''}
+  </div>
+
+  ${b.ueb<0?`<div style="padding:9px 12px;background:rgba(248,113,113,0.08);border-radius:8px;font-size:10.5px;color:var(--tx2)">
+    ⚠ Bei diesem Pensum entsteht ein Defizit von ${fmtC(-b.ueb)}/Mt — das Vermögen wird abgebaut.
   </div>`:''}`;
 }
+
+
 
 function renderSzenarien(){
   const body=document.getElementById('proj-body');
