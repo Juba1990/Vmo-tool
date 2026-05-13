@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='41.0.0';
+const APP_VERSION='42.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -7527,14 +7527,19 @@ function renderFireRechner(){
       ${(()=>{
         const bp20=baristaParams[firePersonView]||{p1:20,p2:0};
         const bSim=calcBaristaScenario(fp,bp20.p1||0,isPerson?0:(bp20.p2||0));
-        const bYear=bSim.fireCalc.fireYear;
-        const bYrs=bSim.fireCalc.yrs;
-        const deltaYrs=yrs&&bYrs?(yrs-bYrs):null;
-        return `<div style="background:rgba(251,191,36,0.07);border-radius:11px;padding:12px 14px;border-left:3px solid var(--am);cursor:pointer" onclick="document.getElementById('fire-barista-body')?.scrollIntoView({behavior:'smooth'})">
+        const deltaYrs=yrs!==null&&bSim.baristaYrs!==null?(yrs-bSim.baristaYrs):null;
+        const label=isPerson?`${fp.penName||n1()} ${bp20.p1||0}%`:`${n1()} ${bp20.p1||0}% · ${n2()} ${bp20.p2||0}%`;
+        return `<div style="background:rgba(251,191,36,0.07);border-radius:11px;padding:12px 14px;border-left:3px solid var(--am);cursor:pointer"
+          onclick="document.getElementById('fire-barista-body')?.scrollIntoView({behavior:'smooth'})">
           <div style="font-size:9px;color:var(--am);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">☕ Barista FIRE</div>
-          <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${bYear?'var(--am)':'var(--rd)'}">${bYear||'> 100 J.'}</div>
-          <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">${isPerson?`${fp.penName||n1()} ${bp20.p1||0}% Pensum`:`${n1()} ${bp20.p1||0}% · ${n2()} ${bp20.p2||0}%`}</div>
-          ${deltaYrs?`<div style="font-size:9px;color:var(--am);margin-top:2px">${deltaYrs>0?deltaYrs+' J. früher als FIRE':deltaYrs<0?(-deltaYrs)+' J. später':''} · ${bSim.ahvBeideGedeckt?'✅ AHV gedeckt':'⚠ AHV prüfen'}</div>`:''}
+          <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${bSim.baristaYear?'var(--am)':'var(--rd)'}">
+            ${bSim.baristaYrs===0?'Sofort':bSim.baristaYear||'> 100 J.'}
+          </div>
+          <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">${label}</div>
+          ${deltaYrs!==null?`<div style="font-size:9px;color:${deltaYrs>0?'var(--am)':'var(--tx3)'};margin-top:2px">
+            ${deltaYrs>0?deltaYrs+' J. früher als FIRE':deltaYrs===0?'Gleich wie FIRE':(-deltaYrs)+' J. nach FIRE'}
+            · ${bSim.ahvBeideGedeckt?'✅ AHV':'⚠ AHV prüfen'}
+          </div>`:''}
         </div>`;
       })()}
     </div>
@@ -7885,32 +7890,69 @@ function renderFireRechner(){
 // ── Barista FIRE helper ──
 // Berechnet FIRE-Szenario mit reduziertem Pensum
 // Gibt: {nettoMt, sparrate, fireCalc, ahvGedeckt, ahvErsparnis}
-function calcBaristaScenario(fp, p1Pensum, p2Pensum){
-  // Scale netto linearly with pensum change
-  const netto1New=fp.p1Pensum>0?fp.netto1*(p1Pensum/fp.p1Pensum):0;
-  const netto2New=fp.p2Pensum>0?fp.netto2*(p2Pensum/fp.p2Pensum):0;
-  const nettoNew=netto1New+netto2New;
-  const ueb=nettoNew-fp.ausgaben;
-  const spNew=Math.max(0,ueb);
 
-  // AHV gedeckt wenn mind. einer ein Einkommen > ~CHF 10k/J hat
-  // oder wenn Einkommen des Partners mind. CHF 1'060/J AHV (ca. CHF 11k Lohn)
-  const lohn1Jahr=netto1New*12*1.25; // grob brutto
-  const lohn2Jahr=netto2New*12*1.25;
+// ── Barista / Partial FIRE Helper ──
+// Frage: "Ab wann kann ich auf X% Pensum reduzieren?"
+// = Wann ist das Depot gross genug, um den Fehlbetrag (Ausgaben - Einkommen@X%) zu decken?
+function calcBaristaScenario(fp, p1Pensum, p2Pensum){
+  const isPerson=!!fp.personFilter;
+
+  // Einkommen bei Ziel-Pensum
+  const netto1New=fp.p1Pensum>0?fp.netto1*(p1Pensum/fp.p1Pensum):0;
+  const netto2New=(!isPerson&&fp.p2Pensum>0)?fp.netto2*(p2Pensum/fp.p2Pensum):0;
+  const nettoNew=netto1New+netto2New;
+
+  // Fehlbetrag: was das Depot decken muss
+  const fehlbetragMt=Math.max(0, fp.ausgaben-nettoNew);
+  const fehlbetragJahr=fehlbetragMt*12;
+
+  // Depot-Ziel für diesen Fehlbetrag (gleiche Entnahmerate wie FIRE)
+  const depotZiel=fehlbetragJahr>0?(fehlbetragJahr/fp.entnahmeRate*100):0;
+
+  // Wenn kein Fehlbetrag (Einkommen >= Ausgaben): sofort möglich
+  if(depotZiel<=0){
+    return {netto1New,netto2New,nettoNew,fehlbetragMt:0,depotZiel:0,
+      baristaYear:new Date().getFullYear(),baristaYrs:0,
+      ahv1Gedeckt:p1Pensum>0,ahv2Gedeckt:p2Pensum>0,ahvBeideGedeckt:true,
+      ahvErsparnis:fp.ahvBeitragNE||0,
+      überschussMt:Math.round(nettoNew-fp.ausgaben)};
+  }
+
+  // Simuliere: wann wächst das Depot auf depotZiel?
+  const rMonth=fp.rendite/100/12;
+  const rYear=fp.rendite/100;
+  const now=new Date().getFullYear();
+
+  // Wir sparen weiterhin mit voller Sparrate bis zum Barista-Datum
+  let w=fp.freeAssets, months=0;
+  while(w<depotZiel && months<1200){
+    w=w*(1+rMonth)+fp.sparrate;
+    months++;
+  }
+  const baristaYrs=months>=1200?null:Math.ceil(months/12);
+  const baristaYear=baristaYrs!==null?now+baristaYrs:null;
+
+  // AHV-Deckung prüfen
+  const lohn1Jahr=netto1New*12*1.3; // grob brutto
+  const lohn2Jahr=netto2New*12*1.3;
   const ahv1Gedeckt=p1Pensum>0&&lohn1Jahr>10000;
   const ahv2Gedeckt=p2Pensum>0&&lohn2Jahr>10000;
-  // Wenn einer ≥ doppelter Mindestbeitrag: beide gedeckt
   const ahvBeideGedeckt=ahv1Gedeckt||ahv2Gedeckt;
+  const ahvErsparnis=ahvBeideGedeckt?(fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets)):0;
 
-  // AHV-Ersparnis vs. komplett aufhören
-  const ahvBeitragOhne=fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets);
-  const ahvErsparnis=ahvBeideGedeckt?ahvBeitragOhne:0;
+  // Depot-Entnahme nach Barista-Datum (monatlich)
+  const depotEntnahmeMt=Math.round(depotZiel*fp.entnahmeRate/100/12);
 
-  // FIRE-Berechnung mit neuer Sparrate
-  const fireCalc=calcFireTimeline(fp, spNew);
-
-  return {netto1New,netto2New,nettoNew,ueb,spNew,
-    ahv1Gedeckt,ahv2Gedeckt,ahvBeideGedeckt,ahvErsparnis,fireCalc};
+  return {
+    netto1New:Math.round(netto1New), netto2New:Math.round(netto2New),
+    nettoNew:Math.round(nettoNew), fehlbetragMt:Math.round(fehlbetragMt),
+    depotZiel:Math.round(depotZiel), depotEntnahmeMt,
+    baristaYrs, baristaYear,
+    baristaAge1:baristaYrs!==null?fp.age1+baristaYrs:null,
+    baristaAge2:(!isPerson&&baristaYrs!==null)?fp.age2+baristaYrs:null,
+    ahv1Gedeckt, ahv2Gedeckt, ahvBeideGedeckt, ahvErsparnis,
+    überschussMt:Math.round(nettoNew+depotEntnahmeMt-fp.ausgaben),
+  };
 }
 
 function renderBaristaFire(){
@@ -7921,47 +7963,36 @@ function renderBaristaFire(){
   const isPerson=!!fp.personFilter;
   const view=firePersonView;
 
-  // Current barista params for this view
   const bp=baristaParams[view]||{p1:20,p2:0};
-  const p1Cur=bp.p1!==undefined?bp.p1:(isPerson?20:20);
-  const p2Cur=bp.p2!==undefined?bp.p2:(isPerson?0:0);
+  const p1Cur=bp.p1!==undefined?bp.p1:20;
+  const p2Cur=bp.p2!==undefined?bp.p2:0;
 
-  // Calculate full FIRE (no work) for comparison
-  const fullCalc=calcFireTimeline(fp, fp.sparrate);
-
-  // Calculate Barista scenario
   const b=calcBaristaScenario(fp, p1Cur, isPerson?0:p2Cur);
 
-  // Delta vs full FIRE
-  const deltaYrs=fullCalc.yrs&&b.fireCalc.yrs?(fullCalc.yrs-b.fireCalc.yrs):null;
-  const isBaristaBetter=deltaYrs&&deltaYrs>0;
+  // Vergleich mit vollem FIRE
+  const fullFireYrs=calcFireTimeline(fp).yrs;
+  const deltaYrs=fullFireYrs!==null&&b.baristaYrs!==null?(fullFireYrs-b.baristaYrs):null;
 
-  // AHV-Rente impact: wenn man weniger arbeitet → niedrigere AHV
-  // Vereinfachung: wir zeigen nur ob gedeckt oder nicht
-  const pkCoverageNote=b.ahvBeideGedeckt
-    ?`✅ AHV gedeckt — kein Beitrag als Nicht-Erwerbstätiger (spart ~${fmtC(b.ahvErsparnis)}/J)`
-    :`⚠ AHV nicht gedeckt — ~${fmtC(fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J als Nicht-Erwerbstätiger`;
-
-  // Quick presets
+  // Presets
   const presets=isPerson
-    ?[{l:'10%',v:10},{l:'20%',v:20},{l:'30%',v:30},{l:'40%',v:40},{l:'0% (Vollausstieg)',v:0}]
-    :[{l:'Einer 20%',p1:20,p2:0},{l:'Einer 40%',p1:40,p2:0},{l:'Beide 20%',p1:20,p2:20},
-      {l:'Beide 40%',p1:40,p2:40},{l:'Vollausstieg',p1:0,p2:0}];
+    ?[{l:'10%',p1:10},{l:'20%',p1:20},{l:'30%',p1:30},{l:'40%',p1:40},{l:'50%',p1:50}]
+    :[{l:`Einer 20%`,p1:20,p2:0},{l:`Einer 40%`,p1:40,p2:0},{l:`Beide 20%`,p1:20,p2:20},{l:`Beide 40%`,p1:40,p2:40},{l:`Beide 50%`,p1:50,p2:50}];
 
   body.innerHTML=`
-  <!-- Erklärung -->
-  <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;margin-bottom:12px;font-size:10.5px;color:var(--tx2);line-height:1.55">
-    ☕ <strong>Barista FIRE</strong>: Wie verändert sich dein FIRE-Datum wenn du noch etwas weiterarbeitest? In CH besonders wertvoll: schon 20% Pensum (ca. CHF 10k/J Einkommen) deckt die AHV für beide.
+  <!-- Was wird berechnet -->
+  <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;margin-bottom:14px;font-size:10.5px;color:var(--tx2);line-height:1.55">
+    <strong>Frage:</strong> Ab wann kannst du auf das Ziel-Pensum reduzieren und trotzdem alles finanzieren?<br>
+    <span style="color:var(--tx3)">Das Depot deckt den Fehlbetrag zwischen Ausgaben und reduziertem Einkommen.</span>
   </div>
 
-  <!-- Quick Presets -->
+  <!-- Presets -->
   <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">
-    ${presets.map(b=>{
-      const isActive=isPerson?(p1Cur===(b.v||0)):(p1Cur===(b.p1||0)&&p2Cur===(b.p2||0));
-      return `<button onclick="baristaParams['${view}']=${isPerson?`{p1:${b.v||0}}`:`{p1:${b.p1||0},p2:${b.p2||0}}`};renderBaristaFire()"
+    ${presets.map(pr=>{
+      const isActive=isPerson?(p1Cur===pr.p1):(p1Cur===pr.p1&&p2Cur===pr.p2);
+      return `<button onclick="baristaParams['${view}']={p1:${pr.p1||0},p2:${pr.p2||0}};renderBaristaFire()"
         style="padding:5px 10px;border-radius:7px;font-size:10px;font-family:var(--fb);cursor:pointer;
         background:${isActive?'var(--am)':'var(--bg3)'};color:${isActive?'#000':'var(--tx2)'};
-        border:1px solid ${isActive?'var(--am)':'var(--bdr)'}">${b.l}</button>`;
+        border:1px solid ${isActive?'var(--am)':'var(--bdr)'}">${pr.l}</button>`;
     }).join('')}
   </div>
 
@@ -7969,8 +8000,8 @@ function renderBaristaFire(){
   <div style="display:grid;grid-template-columns:${isPerson?'1fr':'1fr 1fr'};gap:12px;margin-bottom:14px">
     <div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-        <span>${isPerson?(fp.penName||n1()):(n1())}</span>
-        <div style="display:flex;align-items:center;gap:6px">
+        <span>${isPerson?(fp.penName||n1()):n1()} Ziel-Pensum</span>
+        <div style="display:flex;align-items:center;gap:8px">
           <strong style="color:var(--tx);font-family:var(--fm)">${p1Cur}%</strong>
           <span style="font-size:9.5px;color:var(--tx3)">Netto ~${fmtC(b.netto1New)}/Mt</span>
         </div>
@@ -7983,8 +8014,8 @@ function renderBaristaFire(){
     </div>
     ${!isPerson?`<div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-        <span>${n2()}</span>
-        <div style="display:flex;align-items:center;gap:6px">
+        <span>${n2()} Ziel-Pensum</span>
+        <div style="display:flex;align-items:center;gap:8px">
           <strong style="color:var(--tx);font-family:var(--fm)">${p2Cur}%</strong>
           <span style="font-size:9.5px;color:var(--tx3)">Netto ~${fmtC(b.netto2New)}/Mt</span>
         </div>
@@ -7997,40 +8028,59 @@ function renderBaristaFire(){
     </div>`:''}
   </div>
 
-  <!-- Ergebnis Grid -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Haushalt-Netto</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(b.nettoNew)}/Mt</div>
-      <div style="font-size:9.5px;color:${b.ueb>=0?'var(--gr)':'var(--rd)'};margin-top:2px;font-family:var(--fm)" class="blur-val">${b.ueb>=0?'+':''}${fmtC(b.ueb)}/Mt Überschuss</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Sparrate (nach 3a)</div>
-      <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--tx)">${fmtC(b.spNew)}/Mt</div>
-    </div>
-    <div style="background:${b.fireCalc.fireYear?'rgba(74,222,128,0.07)':'rgba(248,113,113,0.07)'};border-radius:10px;padding:11px 13px;border-left:3px solid ${b.fireCalc.fireYear?'var(--gr)':'var(--rd)'}">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">☕ Barista FIRE</div>
-      <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${b.fireCalc.fireYear?'var(--gr)':'var(--rd)'}">${b.fireCalc.fireYear||'> 100 J.'}</div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${b.fireCalc.yrs?`In ${b.fireCalc.yrs} J.`:''}</div>
-    </div>
-    <div style="background:var(--bg3);border-radius:10px;padding:11px 13px;border-left:3px solid ${isBaristaBetter?'var(--am)':'var(--bdr)'}">
-      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">vs. Vollausstieg</div>
-      <div style="font-family:var(--fm);font-size:15px;font-weight:500;color:${isBaristaBetter?'var(--am)':'var(--tx3)'}">
-        ${deltaYrs===null?'—':deltaYrs>0?`${deltaYrs} J. früher`:deltaYrs<0?`${-deltaYrs} J. später`:'Gleich'}
+  <!-- Cashflow-Logik bei Ziel-Pensum -->
+  <div style="background:var(--bg3);border-radius:10px;padding:11px 13px;margin-bottom:12px">
+    <div style="font-size:10px;font-weight:500;color:var(--tx2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">Monatliche Bilanz bei Ziel-Pensum</div>
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <div style="display:flex;justify-content:space-between;font-size:10.5px">
+        <span style="color:var(--tx3)">Ausgaben</span>
+        <span class="blur-val" style="font-family:var(--fm);color:var(--tx)">−${fmtC(fp.ausgaben)}/Mt</span>
       </div>
-      <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">FIRE ${fullCalc.fireYear||'?'} ohne Pensum</div>
+      <div style="display:flex;justify-content:space-between;font-size:10.5px">
+        <span style="color:var(--tx3)">Einkommen (${isPerson?p1Cur+'%':`${p1Cur}%+${p2Cur}%`})</span>
+        <span class="blur-val" style="font-family:var(--fm);color:var(--gr)">+${fmtC(b.nettoNew)}/Mt</span>
+      </div>
+      ${b.fehlbetragMt>0?`<div style="display:flex;justify-content:space-between;font-size:10.5px;padding-top:4px;border-top:1px solid var(--bdr)">
+        <span style="color:var(--am)">Fehlbetrag → Depot deckt</span>
+        <span class="blur-val" style="font-family:var(--fm);color:var(--am)">+${fmtC(b.depotEntnahmeMt)}/Mt (${fp.entnahmeRate}%)</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--tx3);margin-top:2px">
+        <span>Dafür nötiges Depot</span>
+        <span class="blur-val" style="font-family:var(--fm)">${fmtC(b.depotZiel)}</span>
+      </div>`:`<div style="display:flex;justify-content:space-between;font-size:10.5px;padding-top:4px;border-top:1px solid var(--bdr)">
+        <span style="color:var(--gr)">Einkommen deckt alle Ausgaben</span>
+        <span class="blur-val" style="font-family:var(--fm);color:var(--gr)">+${fmtC(b.überschussMt)}/Mt Überschuss</span>
+      </div>`}
     </div>
   </div>
 
-  <!-- AHV Status -->
-  <div style="padding:9px 12px;background:${b.ahvBeideGedeckt?'rgba(74,222,128,0.07)':'rgba(251,191,36,0.07)'};border:1px solid ${b.ahvBeideGedeckt?'rgba(74,222,128,0.2)':'rgba(251,191,36,0.25)'};border-radius:8px;font-size:10.5px;color:var(--tx2);line-height:1.55;margin-bottom:10px">
-    ${pkCoverageNote}
-    ${b.ahvBeideGedeckt?`<br><span style="font-size:9.5px;color:var(--tx3)">Tipp: Wer min. CHF 10k/J verdient deckt AHV für sich (und bei Ehe für den Partner).</span>`:''}
+  <!-- Haupt-Ergebnis -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="background:${b.baristaYear?'rgba(251,191,36,0.08)':'rgba(248,113,113,0.08)'};border-radius:11px;padding:12px 14px;border-left:3px solid ${b.baristaYear?'var(--am)':'var(--rd)'}">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">☕ Ab wann möglich</div>
+      <div style="font-family:var(--fm);font-size:17px;font-weight:500;color:${b.baristaYear?'var(--am)':'var(--rd)'}">
+        ${b.baristaYrs===0?'Sofort!':b.baristaYear||'> 100 J.'}
+      </div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">
+        ${b.baristaYrs>0?`In ${b.baristaYrs} J. · ${n1()} ${b.baristaAge1}J.${!isPerson&&b.baristaAge2?' · '+n2()+' '+b.baristaAge2+'J.':''}`:b.baristaYrs===0?`Heute bereits finanzierbar`:'-'}
+      </div>
+    </div>
+    <div style="background:var(--bg3);border-radius:11px;padding:12px 14px;border-left:3px solid ${deltaYrs&&deltaYrs>0?'var(--gr)':'var(--bdr)'}">
+      <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">vs. Volles FIRE</div>
+      <div style="font-family:var(--fm);font-size:17px;font-weight:500;color:${deltaYrs&&deltaYrs>0?'var(--gr)':'var(--tx)'}">
+        ${deltaYrs===null?'—':deltaYrs>0?`${deltaYrs} J. früher`:deltaYrs===0?'Gleich':deltaYrs<0?`${-deltaYrs} J. später`:'—'}
+      </div>
+      <div style="font-size:9.5px;color:var(--tx3);margin-top:3px">Volles FIRE: ${fullFireYrs?new Date().getFullYear()+fullFireYrs+'(in '+fullFireYrs+' J.)':'—'}</div>
+    </div>
   </div>
 
-  ${b.ueb<0?`<div style="padding:9px 12px;background:rgba(248,113,113,0.08);border-radius:8px;font-size:10.5px;color:var(--tx2)">
-    ⚠ Bei diesem Pensum entsteht ein Defizit von ${fmtC(-b.ueb)}/Mt — das Vermögen wird abgebaut.
-  </div>`:''}`;
+  <!-- AHV-Status -->
+  <div style="padding:9px 12px;background:${b.ahvBeideGedeckt?'rgba(74,222,128,0.07)':'rgba(251,191,36,0.07)'};border:1px solid ${b.ahvBeideGedeckt?'rgba(74,222,128,0.2)':'rgba(251,191,36,0.25)'};border-radius:8px;font-size:10.5px;color:var(--tx2);line-height:1.55">
+    ${b.ahvBeideGedeckt
+      ?`✅ AHV gedeckt — kein Beitrag als Nicht-Erwerbstätiger (spart ~${fmtC(b.ahvErsparnis)}/J)`
+      :`⚠ AHV nicht gedeckt bei diesem Pensum — ~${fmtC(fp.ahvBeitragNE||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J als Nicht-Erwerbstätiger. Min. CHF 10k Einkommen/J reicht für Deckung.`}
+    ${(p1Cur>0||p2Cur>0)&&!b.ahvBeideGedeckt?`<br><span style="font-size:9.5px;color:var(--tx3)">Tipp: Wer mind. CHF 10k/J verdient deckt AHV für sich (und bei Ehe für den Partner).</span>`:''}
+  </div>`;
 }
 
 
