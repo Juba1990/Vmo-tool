@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='43.0.0';
+const APP_VERSION='44.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1620,6 +1620,75 @@ const DEFAULT_INCOME={
   saeule3a_p:7258          // annual 3a contribution person 2
 };
 let income=JSON.parse(JSON.stringify(DEFAULT_INCOME));
+
+// ══ ZENTRALE ANNAHMEN (Schweiz 2026) — Single Source of Truth ══
+const ASSUMPTIONS={
+  AHV_MAX_MT_BASE:2520,   // max. Monatsrente Einzelperson 2026 (ohne 13.)
+  AHV_MIN_MT_BASE:1260,   // min. Monatsrente Einzelperson 2026 (ohne 13.)
+  AHV_MDL_MAX:90720,      // max. massgebendes durchschnittl. Jahreseinkommen 2026
+  AHV_MDL_MIN:15120,      // Untergrenze mdE (Skala 44, 2026)
+  UWS:0.058,              // PK-Umwandlungssatz konservativ
+  UWS_BVG:0.068,          // BVG-Mindestumwandlungssatz
+  MAX_3A:7258,            // Saeule 3a mit PK, 2026
+  INFLATION:2.0,          // Default-Inflation %
+  SWR:3.5                 // Safe Withdrawal Rate % (langer Horizont)
+};
+ASSUMPTIONS.AHV_MAX_MT=Math.round(ASSUMPTIONS.AHV_MAX_MT_BASE*13/12);   // 2730 (12-Schnitt inkl. 13.)
+ASSUMPTIONS.AHV_COUPLE_CAP_MT=Math.round(ASSUMPTIONS.AHV_MAX_MT*1.5);   // 4095 (Ehepaar-Plafonierung 150%)
+
+// Volle AHV-Monatsrente (inkl. 13.) — Naeherung der Skala 44 (2026)
+function ahvRenteVoll(mdE){
+  const MIN=ASSUMPTIONS.AHV_MIN_MT_BASE, MAX=ASSUMPTIONS.AHV_MAX_MT_BASE;
+  const Y0=ASSUMPTIONS.AHV_MDL_MIN, YM=ASSUMPTIONS.AHV_MDL_MAX, YB=45360, RB=1935; // Knickstelle 2026
+  let base;
+  if(mdE<=Y0) base=MIN;
+  else if(mdE>=YM) base=MAX;
+  else if(mdE<=YB) base=MIN+(mdE-Y0)*(RB-MIN)/(YB-Y0);
+  else base=RB+(mdE-YB)*(MAX-RB)/(YM-YB);
+  return base*13/12; // inkl. 13. AHV
+}
+// AHV-Rente einer Person: volle Rente x Beitragsjahre/44
+function ahvRente(mdE, beitragsJahre){
+  return Math.round(ahvRenteVoll(Math.min(mdE||0, ASSUMPTIONS.AHV_MDL_MAX))*Math.min(1,(beitragsJahre||44)/44));
+}
+// Ehepaar-Plafonierung: Summe max. 150% der Maximalrente
+function ahvPlafonieren(mtI, mtP){
+  const cap=ASSUMPTIONS.AHV_COUPLE_CAP_MT, sum=(mtI||0)+(mtP||0);
+  if(sum<=cap) return {i:mtI,p:mtP,total:sum,capped:false};
+  return {i:Math.round((mtI||0)*cap/sum), p:Math.round((mtP||0)*cap/sum), total:cap, capped:true};
+}
+// BVG-Altersgutschrift in % des koordinierten Lohns
+function bvgGutschriftSatz(age){ if(age<25)return 0; if(age<=34)return 0.07; if(age<=44)return 0.10; if(age<=54)return 0.15; return 0.18; }
+function koordinierterLohn(bruttoLohn){
+  const KOORD_ABZUG=26460, MIN=3675, MAX=64260; // BVG 2026
+  const k=Math.max(0,(bruttoLohn||0)-KOORD_ABZUG);
+  return k<=0?0:Math.min(MAX, Math.max(MIN, k));
+}
+function pkGutschriftJahr(age, bruttoLohn){ return Math.round(bvgGutschriftSatz(age)*koordinierterLohn(bruttoLohn)); }
+// Vermoegenssteuer Basel-Stadt (Naeherung, progressiv 4.5-8‰; Vorsorge 2./3. Saeule steuerfrei)
+function estimateVermoegenssteuerBS(netWealth, verheiratet=true){
+  const frei=verheiratet?150000:75000;
+  let rem=Math.max(0,(netWealth||0)-frei);
+  if(rem<=0)return 0;
+  let tax=0;
+  const brackets=[[500000,0.0045],[500000,0.006],[1000000,0.007],[Infinity,0.008]];
+  for(const [width,rate] of brackets){ if(rem<=0)break; const amt=Math.min(rem,width); tax+=amt*rate; rem-=amt; }
+  return Math.round(tax);
+}
+// Steuerbares (freies) Vermoegen = Nicht-Vorsorge-Positionen im letzten Monat
+function getTaxableWealth(){
+  const ms=sortMs(Object.keys(db||{}).filter(m=>!hiddenMonths.has(m)));
+  const lastM=ms.length?ms[ms.length-1]:null;
+  if(!lastM)return 0;
+  let free=0;
+  ['ich','partner','kinder'].forEach(p=>{
+    const e=db[lastM]?.[p]||{};
+    getCats().forEach(g=>g.items.forEach(it=>{
+      const v=e[it.id]; if(typeof v==='number'&&v!==0&&itemVorsorge(g.id,it.id)==='free') free+=v;
+    }));
+  });
+  return Math.max(0,free);
+}
 let budgetMode='gemeinsam'; // 'gemeinsam' | 'getrennt'
 let bpTab='plan'; // 'plan' | 'ist' | 'verlauf'
 let bpIstMonth=''; // currently selected month for Ist-Eingabe
@@ -5196,23 +5265,30 @@ function calcRente(){
   // Mindestrente CHF 1'260 gilt NUR bei vollständiger Beitragszeit (44 Jahre)
   // Bei unvollständiger Beitragszeit gibt es KEINE Mindestrente — rein proportional
   const quotient=Math.min(1, pa.arbJahre/44);
-  const mdl=Math.min(pa.lohn, 88200); // Maximaler massgeblicher Lohn 2025
-  // Vollrente berechnen (bei 44 Bj, Lohn = mdl)
-  const vollrenteBrutto=Math.min(2520, Math.max(1260, Math.round(0.325*mdl + 793)));
-  // Proportional kürzen — kein Minimum bei unvollständiger Beitragszeit
-  const ahvMonatlich=Math.round(vollrenteBrutto * quotient);
+  const mdl=Math.min(pa.lohn, ASSUMPTIONS.AHV_MDL_MAX); // max. massgebender Lohn 2026: 90'720
+  // Vollrente inkl. 13. AHV (Naeherung Skala 44 2026)
+  const vollrenteBrutto=Math.round(ahvRenteVoll(mdl));
+  // Proportional nach Beitragsjahren kuerzen
+  const ahvMonatlich=ahvRente(mdl, pa.arbJahre);
+  // Ehepaar-Plafonierung (150% der Maximalrente kombiniert)
+  const _other=p==='ich'?'partner':'ich';
+  const _opa=renteParams[_other]||{};
+  const ahvPartnerMt=ahvRente(Math.min(_opa.lohn||0,ASSUMPTIONS.AHV_MDL_MAX), _opa.arbJahre||44);
+  const ahvPlaf=ahvPlafonieren(ahvMonatlich, ahvPartnerMt);
 
   // ── SÄULE 2: PK ──
   const pkR=pa.pkRendite/100;
-  let pkFinal=pa.pk;for(let y=0;y<yearsLeft;y++)pkFinal=pkFinal*(1+pkR)+pa.pkBeitrag;
+  const nowAge0=nowY-(pa.gebJahr||1985);
+  let pkFinal=pa.pk;
+  for(let y=0;y<yearsLeft;y++){ const ageY=nowAge0+y; pkFinal=pkFinal*(1+pkR)+Math.max(pa.pkBeitrag||0, pkGutschriftJahr(ageY, pa.lohn)); }
   pkFinal=Math.round(pkFinal);
   // Umwandlungssatz (UWS):
   // 6.8% = gesetzlicher BVG-Mindestsatz für obligatorischen Teil (Lohn CHF 25'725–88'200)
   // Bei überobligatorischen Guthaben (hohe Löhne) wenden PKs oft 5.0–5.5% an
   // Effektiver Gesamt-UWS liegt je nach PK typisch zwischen 5.5% und 6.8%
   // Wir zeigen beide: den gesetzlichen Mindestsatz und einen realistischeren Satz
-  const uws_bvg=0.068;    // BVG-Obligatorium (gesetzlich)
-  const uws_effektiv=0.055; // Realistisch für gemischte Guthaben (Über-/Obligatorium)
+  const uws_bvg=ASSUMPTIONS.UWS_BVG;    // BVG-Obligatorium (gesetzlich)
+  const uws_effektiv=ASSUMPTIONS.UWS;   // Realistisch (gemischte Guthaben)
   const pkRenteBVG=Math.round(pkFinal*uws_bvg/12);      // Obere Schranke
   const pkRenteKonserv=Math.round(pkFinal*uws_effektiv/12); // Realistischerer Wert
 
@@ -5220,8 +5296,8 @@ function calcRente(){
   const ms=aMs();const lastM=ms.length?ms[ms.length-1]:null;
   const viacVal=lastM?(db[lastM]?.[p]?.viac||0):0;
   const s3base=pa.s3||viacVal;
-  // Annahme: VIAC bis Pensionierung mit 5% Rendite, max CHF 7'056/J Einzahlung
-  const maxS3Einzahlung=7258;// 2025
+  // Annahme: VIAC bis Pensionierung mit 5% Rendite, max Saeule-3a-Einzahlung
+  const maxS3Einzahlung=ASSUMPTIONS.MAX_3A;// 2026: 7'258
   let s3Final=s3base;for(let y=0;y<yearsLeft;y++)s3Final=s3Final*1.05+maxS3Einzahlung;
   s3Final=Math.round(s3Final);
   // 3a Kapitalbezug, kein Rentenanspruch → verteilt auf 20J Lebenserwartung post-Pension
@@ -5238,10 +5314,10 @@ function calcRente(){
   <div class="renten-title" style="margin-bottom:10px">Prognose ${pName} — Renteneintritt ca. ${nowY+yearsLeft} (Alter ${pa.rentenalter}), noch ${yearsLeft} Jahre</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
     <div class="renten-result-card hero">
-      <div class="renten-result-lbl">Realistisch (UWS 5.5%, empfohlen)</div>
+      <div class="renten-result-lbl">Realistisch (UWS 5.8%, empfohlen)</div>
       <div class="renten-result-val blur-val" style="color:var(--gr)">${fmt(totalRealistisch)}</div>
       <div class="renten-result-sub blur-val">Netto ca. ${fmt(netRealistisch)} / Monat nach Steuern</div>
-      <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:5px">Umwandlungssatz 5.5% — für PKs mit überobligatorischem Anteil (hohe Löhne) realistischer</div>
+      <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:5px">Umwandlungssatz 5.8% — für PKs mit überobligatorischem Anteil (hohe Löhne) realistischer</div>
     </div>
     <div class="renten-result-card normal">
       <div class="renten-result-lbl">Obere Schranke (UWS 6.8% BVG-Gesetz)</div>
@@ -5257,7 +5333,7 @@ function calcRente(){
       <div class="saule-val blur-val" style="color:var(--bl)">${fmt(ahvMonatlich)}/Mt.</div>
       <div class="saule-sub">${pa.arbJahre} von 44 Beitragsjahren = ${(pa.arbJahre/44*100).toFixed(0)}%</div>
       <div class="saule-sub" style="margin-top:3px;color:var(--am)">⚠ ${pa.arbJahre<44?'Fehlende '+(44-pa.arbJahre)+' J. kürzen die Rente um '+fmt(Math.round(vollrenteBrutto*(44-pa.arbJahre)/44)):'Vollrente erreicht'}</div>
-      <div class="saule-sub" style="margin-top:3px">Vollrente wäre: ${fmt(vollrenteBrutto)}/Mt.</div>
+      <div class="saule-sub" style="margin-top:3px">Vollrente wäre: ${fmt(vollrenteBrutto)}/Mt.</div>${ahvPlaf.capped?`<div class="saule-sub" style="color:var(--am);margin-top:3px">⚠ Als Ehepaar plafoniert: kombiniert max ${fmt(ASSUMPTIONS.AHV_COUPLE_CAP_MT)}/Mt. — dein Anteil ca. ${fmt(ahvPlaf.i)}</div>`:''}
       <div class="saule-sub">Ø-Lohn Basis: CHF ${(pa.lohn/1000).toFixed(0)}k</div>
     </div>
     <div class="saule-card">
@@ -5266,7 +5342,7 @@ function calcRente(){
       <div class="saule-sub" style="margin-top:3px">PK-Kapital heute: ${fmt(pa.pk)}</div>
       <div class="saule-sub">Prognose Kapital: ${fmt(pkFinal)}</div>
       <div class="saule-sub" style="margin-top:3px">Bei ${pa.pkRendite}% Rendite über ${yearsLeft} J.</div>
-      <div class="saule-sub" style="margin-top:3px">UWS 5.5% (realistisch): ${fmt(pkRenteKonserv)}/Mt.</div>
+      <div class="saule-sub" style="margin-top:3px">UWS 5.8% (realistisch): ${fmt(pkRenteKonserv)}/Mt.</div>
       <div class="saule-sub">UWS 6.8% (BVG-Max): ${fmt(pkRenteBVG)}/Mt.</div>
     </div>
     <div class="saule-card">
@@ -5282,10 +5358,10 @@ function calcRente(){
   <div class="widget">
     <div class="widget-hd"><span class="widget-title">Vergleich verschiedener Rentenalter</span></div>
     <div class="widget-body"><div style="overflow-x:auto"><table class="dtbl">
-      <thead><tr><th>Alter</th><th>PK-Kapital</th><th>AHV/Mt.</th><th>PK/Mt. (5.5%)</th><th>3a/Mt.</th><th>Total brutto</th><th>Netto ~85%</th></tr></thead>
+      <thead><tr><th>Alter</th><th>PK-Kapital</th><th>AHV/Mt.</th><th>PK/Mt. (5.8%)</th><th>3a/Mt.</th><th>Total brutto</th><th>Netto ~85%</th></tr></thead>
       <tbody>${[60,62,64,65,67,70].map(a=>{
         const yL=Math.max(0,(pa.gebJahr+a)-nowY);
-        let pk=pa.pk;for(let y=0;y<yL;y++)pk=pk*(1+pkR)+pa.pkBeitrag;pk=Math.round(pk);
+        let pk=pa.pk;for(let y=0;y<yL;y++){const ageY=nowAge0+y;pk=pk*(1+pkR)+Math.max(pa.pkBeitrag||0,pkGutschriftJahr(ageY,pa.lohn));}pk=Math.round(pk);
         const pkM=Math.round(pk*uws_effektiv/12);
         let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;
         const s3M=Math.round(s3/20/12);
@@ -5302,8 +5378,8 @@ function calcRente(){
   dC('rente');const nowY2=new Date().getFullYear();
   const ages=[55,58,60,62,64,65,67,70].filter(a=>a>=pa.rentenalter-5&&a<=pa.rentenalter+5);
   const renteData=ages.map(a=>{
-    const yL=Math.max(0,(pa.gebJahr+a)-nowY2);let pk=pa.pk;for(let y=0;y<yL;y++)pk=pk*(1+pkR)+pa.pkBeitrag;pk=Math.round(pk);
-    const pkM=Math.round(pk*uws_gesetz/12);let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;const s3M=Math.round(s3/20/12);
+    const yL=Math.max(0,(pa.gebJahr+a)-nowY2);let pk=pa.pk;for(let y=0;y<yL;y++){const ageY=nowAge0+y;pk=pk*(1+pkR)+Math.max(pa.pkBeitrag||0,pkGutschriftJahr(ageY,pa.lohn));}pk=Math.round(pk);
+    const pkM=Math.round(pk*ASSUMPTIONS.UWS/12);let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;const s3M=Math.round(s3/20/12);
     return{ahv:ahvMonatlich,pk:pkM,s3:s3M};
   });
 }
@@ -5549,7 +5625,7 @@ async function addBudgetItem(catId){
 // Für Singles höher (kein Splitting): ~4-5 Prozentpunkte mehr
 const SOZIALABZUEGE_PCT=0.12; // AHV + ALV + NBU + moderater BVG-Beitrag
 
-function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true){
+function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true, saeule3a=0){
   // Realistic effective combined tax rate (Cantonal+Federal) for Basel-Stadt
   // Progressive calculation with proper deductions
   // Based on BS Staffelung 2024 + Bundessteuer DBG
@@ -5564,7 +5640,7 @@ function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true){
   const verheiratetenAbzug=istVerheiratet?1300:0;
 
   // Steuerbares Einkommen
-  let steuerbar=Math.max(0, bruttoJahr - sozialAbzug - bvgAbzug - pauschalAbzug - kinderAbzug - versAbzug - verheiratetenAbzug);
+  let steuerbar=Math.max(0, bruttoJahr - sozialAbzug - bvgAbzug - pauschalAbzug - kinderAbzug - versAbzug - verheiratetenAbzug - (saeule3a||0));
 
   // BS Kantonssteuer Staffelung 2024 (Verheiratete): grobe Schätzung
   // Tarif für Splitting (Verheiratete): grosszügiger als Singles
@@ -5619,7 +5695,7 @@ function calcPersonNetto(p, kinder){
   }else{
     // Auto: Haushalts-Brutto als Basis (splitting für Ehepaar)
     const totalHouseholdBrutto = (income.p1.bruttoJahr*income.p1.pensum/100+(income.p1.bonusJahr||0)) + (income.p2.bruttoJahr*income.p2.pensum/100+(income.p2.bonusJahr||0));
-    steuerPct = estimateSteuerBS(totalHouseholdBrutto, kinder, true);
+    steuerPct = estimateSteuerBS(totalHouseholdBrutto, kinder, true, (income.saeule3a_i||0)+(income.saeule3a_p||0));
   }
   // Steuer wird auf die eigene Brutto-Basis angewendet (Haushalts-Steuersatz mal eigener Anteil)
   const steuer = bruttoEff * steuerPct;
@@ -5703,6 +5779,7 @@ function renderBpPlan(){
   const fixPctOfNetto = hh.nettoMonat>0?(bt.fix/hh.nettoMonat*100):0;
 
   const avgSteuerPct = ((hh.p1.steuerPct+hh.p2.steuerPct)/2*100);
+  const vermSteuerJahr = estimateVermoegenssteuerBS(getTaxableWealth(), (budgetMode!=='getrennt'));
 
   let h=`
   <!-- HERO: 3 big metrics -->
@@ -5736,6 +5813,7 @@ function renderBpPlan(){
         <span class="bp-hero-mini-lbl" style="color:var(--am)">● Variabel</span>
         <span class="bp-hero-mini-val blur-val">${fmt(bt.var)}</span>
       </div>
+      ${vermSteuerJahr>0?`<div class="bp-hero-mini"><span class="bp-hero-mini-lbl" style="color:var(--tx3)">Vermögenssteuer BS</span><span class="bp-hero-mini-val blur-val">${fmt(Math.round(vermSteuerJahr/12))}</span></div>`:''}
       ${kitaExtra>0?`<div class="bp-hero-mini"><span class="bp-hero-mini-lbl" style="color:var(--vi)">● Kita (extra)</span><span class="bp-hero-mini-val blur-val">${fmt(kitaExtra)}</span></div>`:''}
     </div>
     <div class="bp-hero-card ${ueberschussMonat>=0?'primary':'negative'}">
@@ -6847,15 +6925,10 @@ function calcAHVBeitragNichtErwerb(vermögen){
 // Wer früh aufhört hat tiefes Durchschnittseinkommen → CHF 24'000–28'000/J
 // 13. AHV-Rente ab 2026 eingerechnet (+1/12)
 function calcAHVRenteRealistisch(lohn, alterAustritt, anteilVollJahre){
-  // Vollständige Beitragsjahre: 44 für Max
-  const vollJahre = anteilVollJahre || Math.min(44, Math.max(0, alterAustritt - 22));
-  // Mit frühem Austritt: verbleibende Jahre nur Mindestbeiträge → niedrigeres Durchschnittseinkommen
-  const anteil = Math.min(1, vollJahre / 44);
-  // Maximalrente 2026 inkl. 13. AHV: CHF 2'520 × 13/12 = CHF 2'730/Mt
-  const maxMt = 2730; // inkl. 13. AHV
-  // Realistisch: 75–90% des Anteils (wegen tiefem Durchschnittseinkommen bei FIRE)
-  const realistischFaktor = alterAustritt < 50 ? 0.72 : alterAustritt < 55 ? 0.78 : 0.85;
-  return Math.round(maxMt * anteil * realistischFaktor);
+  // Beitragsjahre: ab 21 bis Austritt (frueher Austritt = weniger Jahre = tiefere Rente)
+  const vollJahre = anteilVollJahre || Math.min(44, Math.max(0, alterAustritt - 21));
+  // Einkommensabhaengige Vollrente (Skala-44-Naeherung, inkl. 13.), nach Beitragsjahren gekuerzt
+  return ahvRente(lohn, vollJahre);
 }
 
 function getPKForPerson(person){
@@ -6948,7 +7021,7 @@ function getFireDefaults(personFilter){
       entnahmeRate, inflation:2.0,
       zugangAlter3a:60, zugangAlterPK:pkAlter,
       ahvMonatPP:ahvMt, ahvJahrTotal:ahvMt*12,
-      ahvBeitragNE,
+      ahvBeitragNE, vermoegenssteuerJahr:estimateVermoegenssteuerBS(freeAssets,false),
       penName:isIch?n1():n2(),
       netto1:Math.round((hh.p1?.netto||0)/12), netto2:0,
       p1Pensum:isIch?Math.round(income?.p1?.pensum||80):Math.round(income?.p2?.pensum||80),
@@ -6986,8 +7059,10 @@ function getFireDefaults(personFilter){
   const s3aRendite=0.04;
   const lohnI=renteParams?.ich?.lohn||60000;
   const lohnP=renteParams?.partner?.lohn||60000;
-  const ahvMtI=calcAHVRenteRealistisch(lohnI, ageIch);
-  const ahvMtP=calcAHVRenteRealistisch(lohnP, agePartner);
+  const _ahvMtI=calcAHVRenteRealistisch(lohnI, ageIch);
+  const _ahvMtP=calcAHVRenteRealistisch(lohnP, agePartner);
+  const _plaf=ahvPlafonieren(_ahvMtI,_ahvMtP); // Ehepaar-Plafonierung 150%
+  const ahvMtI=_plaf.i, ahvMtP=_plaf.p;
   const ahvJahrTotal=(ahvMtI+ahvMtP)*12;
   const ahvBeitragNE=calcAHVBeitragNichtErwerb(freeAssets+s3aAssets)*2; // beide Personen
   const fireHorizont=Math.max(0,90-avgAge);
@@ -7017,7 +7092,7 @@ function getFireDefaults(personFilter){
     entnahmeRate, inflation:2.0,
     zugangAlter3a:60, zugangAlterPK:pkAlter,
     ahvMonatI:ahvMtI, ahvMonatP:ahvMtP, ahvMonatPP:Math.round((ahvMtI+ahvMtP)/2),
-    ahvJahrTotal, ahvBeitragNE,
+    ahvJahrTotal, ahvBeitragNE, vermoegenssteuerJahr:estimateVermoegenssteuerBS(freeAssets,true),
     penName:'Haushalt', p1name:n1(), p2name:n2(),
     netto1:Math.round((hh.p1?.netto||0)/12),
     netto2:Math.round((hh.p2?.netto||0)/12),
@@ -7043,9 +7118,10 @@ function calcFireTimeline(fp, overrideSparrate){
     const alter=fp.avgAge+y;
     const istRentner=alter>=fp.penAge;
     const basis=fp.ausgaben*Math.pow(1+infl/100,y);
-    // Vor Rentenalter: AHV-Beitrag als Nicht-Erwerbstätiger dazuzählen
+    // Vor Rentenalter: AHV-Beitrag als Nicht-Erwerbstaetiger dazuzaehlen
     const ahv=istRentner?0:ahvBeitragJahr/12;
-    return basis+ahv;
+    const vst=(fp.vermoegenssteuerJahr||0)/12; // Vermoegenssteuer BS (laufend)
+    return basis+ahv+vst;
   }
 
   // Wachstum PK & 3a bis Zugang MIT Beiträgen
@@ -7171,6 +7247,27 @@ function calcFireTimeline(fp, overrideSparrate){
     return Math.round(w);
   }
 
+  // Sequence-of-Returns: gleiche Logik, aber Crash direkt nach FIRE
+  function depotNachFireJahreSoR(y){
+    if(!wealthAtFire||y<=0) return Math.round(wealthAtFire||fp.freeAssets);
+    let w=wealthAtFire;
+    const shock=[-0.15,-0.10,-0.03];
+    for(let m=0;m<y*12;m++){
+      const yrOffset=Math.floor(m/12);
+      const ausgM=ausgabenInJahrMitAHV(yrOffset);
+      const alterM=fp.avgAge+(fireYrs||0)+yrOffset;
+      const hasPK=alterM>=fp.zugangAlterPK;
+      const hasAHV=alterM>=fp.penAge;
+      const pkDeckt=hasPK?pkRenteMt:0;
+      const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
+      const eff=Math.max(0,ausgM-pkDeckt-ahvDeckt);
+      const rM=yrOffset<shock.length?(Math.pow(1+shock[yrOffset],1/12)-1):rMonth;
+      w=w*(1+rM)-eff;
+      if(w<=0) return 0;
+    }
+    return Math.round(w);
+  }
+
   // Zeitstrahl Events
   const timeline=[];
   if(isPartialFire||partialYear){
@@ -7232,9 +7329,8 @@ function calcFireTimeline(fp, overrideSparrate){
 
   // Chart-Serien
   const chartYears=Math.min(50,Math.max(30,(fireYrs||30)+8));
-  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[],seriesDepotNachFire=[];
+  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[],seriesDepotNachFire=[],seriesDepotSoR=[];
   let wN=fp.freeAssets,wO=fp.freeAssets,wPe=fp.freeAssets;
-  let inFIRE=false, wNachFire=0;
   for(let y=0;y<=chartYears;y++){
     const sp=(y<(fireYrs||1000))?sparrate*12:0;
     seriesNominal.push(Math.round(wN));
@@ -7242,10 +7338,9 @@ function calcFireTimeline(fp, overrideSparrate){
     seriesOpt.push(Math.round(wO));
     seriesPess.push(Math.round(wPe));
     if(fireYrs!==null&&y>=fireYrs){
-      if(!inFIRE){wNachFire=Math.round(wealthAtFire||wN);inFIRE=true;}
-      seriesDepotNachFire.push(wNachFire);
-      wNachFire=Math.max(0,wNachFire*(1+rYear)-entnahmeAtFire*12);
-    } else seriesDepotNachFire.push(null);
+      seriesDepotNachFire.push(depotNachFireJahre(y-fireYrs));   // konsistent mit Zeitstrahl/Cashflow
+      seriesDepotSoR.push(depotNachFireJahreSoR(y-fireYrs));     // Sequence-of-Returns (Crash-Start)
+    } else { seriesDepotNachFire.push(null); seriesDepotSoR.push(null); }
     if(y<chartYears){
       wN=wN*(1+rYear)+sp;
       wO=wO*(1+rYear+0.02)+sp;
@@ -7261,7 +7356,7 @@ function calcFireTimeline(fp, overrideSparrate){
     const hasPK=ageAtCF>=fp.zugangAlterPK;
     const hasAHV=ageAtCF>=fp.penAge;
     const pkDeckt=hasPK?pkRenteMt:0;
-    const s3aDeckt=hasPK&&!hasAHV?(s3aAt60*0.04/12):0;
+    const s3aDeckt=hasPK&&!hasAHV?(s3aAt60/Math.max(1,(90-fp.zugangAlter3a))/12):0; // 3a als Kapitalbezug (konsistent)
     const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
     const ausgReal=fp.ausgaben*Math.pow(1+infl/100,y);
     const depotBedarf=Math.max(0,ausgReal-ahvDeckt-pkDeckt-s3aDeckt);
@@ -7283,7 +7378,7 @@ function calcFireTimeline(fp, overrideSparrate){
     isPartialFire,partialFireZahl,partialYear,partialYrs,
     pctReached,fixkostenMt:Math.round(fp.ausgaben*0.6),
     timeline,
-    chartYears,seriesNominal,seriesReal,seriesOpt,seriesPess,seriesDepotNachFire,
+    chartYears,seriesNominal,seriesReal,seriesOpt,seriesPess,seriesDepotNachFire,seriesDepotSoR,
     cashflowYears,now
   };
 }
@@ -7333,7 +7428,7 @@ function renderFireRechner(){
     isPartialFire, partialFireZahl, partialYear, partialYrs,
     pctReached, wealthAtFire, entnahmeAtFire,
     timeline, fixkostenMt,
-    chartYears, seriesNominal, seriesReal, seriesOpt, seriesPess, seriesDepotNachFire,
+    chartYears, seriesNominal, seriesReal, seriesOpt, seriesPess, seriesDepotNachFire, seriesDepotSoR,
     cashflowYears
   }=calc;
   const infl=fp.inflation||2;
@@ -7678,7 +7773,7 @@ function renderFireRechner(){
         🇨🇭 <strong>AHV als Nicht-Erwerbstätiger (2026):</strong> Beitrag vermögensabhängig — ~${fmtC(ahvBeitragJahr||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J für dein aktuelles Vermögen (Min. CHF 530, Max. CHF 26'500). <strong>Barista FIRE</strong>: Partner bleibt mind. 20–40% tätig → AHV für beide gedeckt, kein eigener Beitrag nötig.
       </div>
       <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
-        🛡 <strong>Sequence-of-Returns Risiko:</strong> Ein Crash in den ersten 3–5 Jahren nach FIRE kann den Plan dauerhaft beschädigen. Empfehlung: Cash-Puffer von 2–3 Jahresausgaben (~${fmtC(fp.ausgaben*30)}) in Cash/Obligationen, damit du in Krisenzeiten nicht verkaufen musst.
+        🛡 <strong>Sequence-of-Returns Risiko:</strong> Ein Crash in den ersten 3–5 Jahren nach FIRE kann den Plan dauerhaft beschädigen. Die rot-gepunktete Linie „Sequenzrisiko" im Wachstums-Chart modelliert genau das (Crash −15%/−10%/−3% direkt nach FIRE). Empfehlung: Cash-Puffer von 2–3 Jahresausgaben (~${fmtC(fp.ausgaben*30)}) in Cash/Obligationen, damit du in Krisenzeiten nicht verkaufen musst.
       </div>
       <div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
         📋 <strong>Bezugsreihenfolge PK & 3a:</strong> Nie PK, 3a und Freizügigkeit im gleichen Steuerjahr beziehen — alles wird zusammengezählt, die Progression explodiert. Max. 3 PK-Tranchen über 3 Kalenderjahre (Art. 13a BVG). PK-Einkäufe 3 Jahre vor Bezug stoppen (Art. 79b BVG Sperrfrist).
@@ -7706,11 +7801,12 @@ function renderFireRechner(){
       charts['fire-growth']=new Chart(el1.getContext('2d'),{
         type:'line',
         data:{labels,datasets:[
-          {label:'Optimistisch',data:seriesOpt,borderColor:'rgba(251,191,36,0.4)',backgroundColor:'rgba(251,191,36,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
-          {label:'Pessimistisch',data:seriesPess,borderColor:'rgba(248,113,113,0.4)',backgroundColor:'rgba(248,113,113,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
+          {label:'Optimistisch (+2%)',data:seriesOpt,borderColor:'rgba(251,191,36,0.4)',backgroundColor:'rgba(251,191,36,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
+          {label:'Pessimistisch (−2.5%)',data:seriesPess,borderColor:'rgba(248,113,113,0.4)',backgroundColor:'rgba(248,113,113,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
           {label:'Real',data:seriesReal,borderColor:'#93c5fd',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[4,3]},
           {label:'Nominal',data:seriesNominal,borderColor:'#4ade80',fill:false,tension:0.3,borderWidth:2.5,pointRadius:0},
           {label:'Nach FIRE',data:seriesDepotNachFire,borderColor:'#f87171',fill:false,tension:0.3,borderWidth:2,pointRadius:0,borderDash:[4,2]},
+          {label:'Sequenzrisiko (Crash-Start)',data:seriesDepotSoR,borderColor:'rgba(248,113,113,0.7)',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[2,2]},
           ...(fireIdx>=0?[{label:'FIRE',data:Array(chartYears+1).fill(null).map((_,i)=>i===fireIdx?seriesNominal[fireIdx]:null),
             pointRadius:Array(chartYears+1).fill(0).map((_,i)=>i===fireIdx?8:0),
             pointBackgroundColor:'#a78bfa',showLine:false,
