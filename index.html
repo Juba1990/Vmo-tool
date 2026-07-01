@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='42.0.0';
+const APP_VERSION='43.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1606,17 +1606,20 @@ let actualBudgetNotes={}; // actualBudgetNotes[month][catId] = comment string
 // When budgetMode='gemeinsam', each item has single {amt}
 
 // Income & family params
-let income={
+const DEFAULT_INCOME={
   p1:{bruttoJahr:120000, pensum:100, bonusJahr:0},
   p2:{bruttoJahr:80000,  pensum:80,  bonusJahr:0},
   steuersatzMode:'auto',   // 'auto' | 'manual'
-  steuersatzManual:18,     // manual %  override
+  steuersatzManual:18,     // manual % override
   kanton:'BS',
   kinder:1,                // number of children
   kitaTage:2,              // kita days per week per child
   kitaKostenProTag:120,    // CHF per kita day (Basel Stadt ~100-150)
-  sparrate3a:7258          // annual 3a contribution (0 if none)
+  kinderzulage:275,        // CHF/month per child
+  saeule3a_i:7258,         // annual 3a contribution person 1
+  saeule3a_p:7258          // annual 3a contribution person 2
 };
+let income=JSON.parse(JSON.stringify(DEFAULT_INCOME));
 let budgetMode='gemeinsam'; // 'gemeinsam' | 'getrennt'
 let bpTab='plan'; // 'plan' | 'ist' | 'verlauf'
 let bpIstMonth=''; // currently selected month for Ist-Eingabe
@@ -1643,6 +1646,9 @@ function ss(s,t){document.getElementById('sdot').className='sdot '+s;document.ge
 let undoStack=[];
 const MAX_UNDO=5;
 
+function collectFullState(){
+  return {db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
+}
 function snapshotState(){
   // Capture current state for undo
   return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes}));
@@ -1688,6 +1694,8 @@ async function undoLast(){
   if(prev.positions)positions=JSON.parse(JSON.stringify(prev.positions));
   if(prev.targetAllocation)targetAllocation=JSON.parse(JSON.stringify(prev.targetAllocation));
   if(prev.projParams)projParams=JSON.parse(JSON.stringify(prev.projParams));
+  if(prev.actualBudget)actualBudget=JSON.parse(JSON.stringify(prev.actualBudget));
+  if(prev.actualBudgetNotes)actualBudgetNotes=JSON.parse(JSON.stringify(prev.actualBudgetNotes));
   // Push the reverted state
   // Skip the snapshot push for the undo itself
   const skipSnapshot=true;
@@ -1777,11 +1785,7 @@ function applyFull(full){
     partner:{gebJahr:1990,rentenalter:64,lohn:80000,arbJahre:38,pk:80000,pkBeitrag:18000,pkRendite:3,s3:0}
   };
   budget=full.budget||null;
-  income=full.income||{
-    p1:{lohn100:120000,pensum:100,kinder:0},
-    p2:{lohn100:80000,pensum:100,kinder:0},
-    kinder:0,kitaTage:0,kitaKostenProTag:120,kinderzulage:275,saeule3a_i:7258,saeule3a_p:7258
-  };
+  income=full.income?{...JSON.parse(JSON.stringify(DEFAULT_INCOME)),...full.income}:JSON.parse(JSON.stringify(DEFAULT_INCOME));
   budgetMode=full.budgetMode||'gemeinsam';
   positions=full.positions||{};
   targetAllocation=full.targetAllocation||{
@@ -2934,11 +2938,7 @@ async function resetSetup(){
     byCurrency:{chf:30,usd:40,eur:20,other:10}
   };
   budget=null;
-  income={
-    p1:{lohn100:120000,pensum:100,kinder:0},
-    p2:{lohn100:80000,pensum:100,kinder:0},
-    kinder:0,kitaTage:0,kitaKostenProTag:120,kinderzulage:275,saeule3a_i:7258,saeule3a_p:7258
-  };
+  income={...JSON.parse(JSON.stringify(DEFAULT_INCOME)),kinder:0,kitaTage:0};
   budgetMode='gemeinsam';
   projParams={rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
   actualBudget={};
@@ -6812,144 +6812,6 @@ function renderBpVerlauf(){
 // ══ FIRE-RECHNER ══
 
 
-// ══════════════════════════════════════════
-// FIRE RECHNER — v33 (komplett neu)
-// ══════════════════════════════════════════
-
-// ── Hilfsfunktion: PK-Rente aus Kapital ──
-// Umwandlungssatz: BVG-Minimum 6.8% (reguläre Rente), realistisch 5.5-6%
-function calcPKRente(pkKapital){ return Math.round(pkKapital * 0.058 / 12); } // 5.8% konservativ
-
-// ── Hilfsfunktion: PK für Person aus DB ──
-function getPKForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  const e=db[lastM]?.[person]||{};
-  let pk=0;
-  getCats().forEach(g=>{g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='pk'&&typeof e[it.id]==='number') pk+=e[it.id];
-  });});
-  return pk>0?pk:(renteParams?.[person]?.pk||0);
-}
-
-function get3aForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  const e=db[lastM]?.[person]||{};
-  let s3a=0;
-  getCats().forEach(g=>{g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='s3a'&&typeof e[it.id]==='number') s3a+=e[it.id];
-  });});
-  return s3a>0?s3a:(renteParams?.[person]?.s3||0);
-}
-
-function getFreeAssetsForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  const e=db[lastM]?.[person]||{};
-  let free=0;
-  getCats().forEach(g=>{g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='free'&&typeof e[it.id]==='number') free+=e[it.id];
-  });});
-  return free;
-}
-
-// ════════════════════════════════════════════════════════
-//  FIRE KERN — v34
-//  Korrekte Berechnung mit:
-//  - PK-Beiträge (aus renteParams.pkBeitrag)
-//  - 3a-Beiträge (aus income.saeule3a_i/p)
-//  - AHV frühestens Alter 63 (Frühpension) bzw. 65
-//  - Coast FIRE immer VOR oder MIT FIRE (nie danach)
-// ════════════════════════════════════════════════════════
-
-
-function calcPKRente(pkKapital){
-  // Umwandlungssatz BVG-Minimum: 6.8% (2024), realistisch überobligatorisch 5–6%
-  // Wir nehmen 5.8% konservativ
-  return Math.round(pkKapital*0.058/12);
-}
-
-function getPKForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return renteParams?.[person]?.pk||0;
-  const e=db[lastM]?.[person]||{};
-  let pk=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='pk'&&typeof e[it.id]==='number') pk+=e[it.id];
-  }));
-  // Cats-Wert hat Vorrang (aktuellster Monat), sonst Rentenrechner-Wert
-  return pk>0?pk:(renteParams?.[person]?.pk||0);
-}
-
-function get3aForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return renteParams?.[person]?.s3||0;
-  const e=db[lastM]?.[person]||{};
-  let s3a=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='s3a'&&typeof e[it.id]==='number') s3a+=e[it.id];
-  }));
-  return s3a>0?s3a:(renteParams?.[person]?.s3||0);
-}
-
-function getFreeAssetsForPerson(person){
-  const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  const e=db[lastM]?.[person]||{};
-  let free=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='free'&&typeof e[it.id]==='number') free+=e[it.id];
-  }));
-  return free;
-}
-
-// ════════════════════════════════════════════════════════
-//  FIRE KERN v35
-//  Fixes:
-//  P1: Sparrate befüllt zuerst 3a, Rest ins Depot
-//  P2: Sparrate pro Person = Haushalt-Sparrate / 2
-//  P3: Inflationsbereinigte FIRE-Zahl & Ausgaben-Wachstum
-//  P4: Depot-Wert-Simulation nach FIRE (im Cashflow-Chart)
-//  P5: Gesamt-FIRE: beide Personen separat in Zeitstrahl
-// ════════════════════════════════════════════════════════
-
-function calcPKRente(pkKapital){
-  return Math.round(pkKapital*0.058/12); // 5.8% Umwandlungssatz konservativ
-}
-
-function getPKForPerson(person){
-  const ms=validMonths('gesamt');const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return renteParams?.[person]?.pk||0;
-  const e=db[lastM]?.[person]||{};
-  let pk=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='pk'&&typeof e[it.id]==='number')pk+=e[it.id];
-  }));
-  return pk>0?pk:(renteParams?.[person]?.pk||0);
-}
-
-function get3aForPerson(person){
-  const ms=validMonths('gesamt');const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return renteParams?.[person]?.s3||0;
-  const e=db[lastM]?.[person]||{};
-  let s3a=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='s3a'&&typeof e[it.id]==='number')s3a+=e[it.id];
-  }));
-  return s3a>0?s3a:(renteParams?.[person]?.s3||0);
-}
-
-function getFreeAssetsForPerson(person){
-  const ms=validMonths('gesamt');const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  const e=db[lastM]?.[person]||{};
-  let free=0;
-  getCats().forEach(g=>g.items.forEach(it=>{
-    if(itemVorsorge(g.id,it.id)==='free'&&typeof e[it.id]==='number')free+=e[it.id];
-  }));
-  return free;
-}
 
 // ════════════════════════════════════════════════════════
 //  FIRE KERN v40 — Swiss FIRE 2026
@@ -8300,15 +8162,13 @@ async function saveCategories(){
 
 // ══ EXPORT ══
 function exportCSV(type){const ms=aMs();if(!ms.length){toast('Keine Daten','warn');return}let csv='',fn='';if(type==='all'){csv=['Monat','Person',...allItemKeys().map(k=>allItems().find(i=>i.id===k)?.label||k),'Einkommen','Investiert'].join(';')+'\n';ms.forEach(m=>['ich','partner'].forEach(p=>{const e=db[m]?.[p]||{};csv+=[fmtM(m),p==='ich'?n1():n2(),...allItemKeys().map(k=>e[k]||0),e.einkommen||0,e.investiert||0].join(';')+'\n'}));fn='vermoegen-detail.csv'}else{csv=['Monat',n1(),n2(),'Cash','Anlagen','Gesamt','Monatl. +/−','Notiz'].join(';')+'\n';ms.forEach((m,i)=>{const e=mgd(m),t=calcT(e);const prev=i>0?calcT(mgd(ms[i-1])):null;const d=prev?t.gesamt-prev.gesamt:'';csv+=`${fmtM(m)};${personT(m,'ich').gesamt};${personT(m,'partner').gesamt};${t.cash};${t.anlagen};${t.gesamt};${d};${notes[m]||''}\n`});fn='vermoegen-monatlich.csv'}const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);cm('modal-export')}
-function exportJSON(){const data={exportDate:new Date().toISOString(),vaultId,db,cats:getCats(),goals,notes,settings,renteParams};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vermoegen-backup.json';a.click();URL.revokeObjectURL(url);cm('modal-export')}
+function exportJSON(){const data={exportDate:new Date().toISOString(),version:14,vaultId,...collectFullState()};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vermoegen-backup.json';a.click();URL.revokeObjectURL(url);cm('modal-export')}
 
 async function exportEncrypted(){
   try{
     const data={
-      exportDate:new Date().toISOString(),version:13,vaultId,
-      db,cats:getCats(),goals,notes,settings,renteParams,
-      income,budget:getBudget(),budgetMode,projParams,
-      hiddenMonths:[...hiddenMonths],widgetState
+      exportDate:new Date().toISOString(),version:14,vaultId,
+      ...collectFullState()
     };
     const enc=await encData(cryptoKey,data);
     const pwSalt=localStorage.getItem('vt_salt')||'';
