@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='44.0.0';
+const APP_VERSION='43.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1358,6 +1358,7 @@ let hiddenMonths=new Set(),widgetState={};
 let currentPerson='ich',periodFilter='12m',currentView='gesamt';
 let charts={},syncTimer=null,editingGoalId=null,editorDraft=null;
 let currentEntryMonth='';
+let gainPeriod='month'; // 'month'|'6m'|'12m'|'ytd' — Vergleichszeitraum im Konten-Tab
 // Positions: { 'YYYY-MM': { 'ich': [{id,name,ticker,value,assetClass,sector,region,currency,accountId}], 'partner': [...] } }
 let positions={};
 // Target allocation: { assetClass:{stocks:60,bonds:20,crypto:10,cash:10}, region:{us:40,eu:30,ch:20,em:10}, ... }
@@ -1606,92 +1607,36 @@ let actualBudgetNotes={}; // actualBudgetNotes[month][catId] = comment string
 // When budgetMode='gemeinsam', each item has single {amt}
 
 // Income & family params
-const DEFAULT_INCOME={
+let income={
   p1:{bruttoJahr:120000, pensum:100, bonusJahr:0},
   p2:{bruttoJahr:80000,  pensum:80,  bonusJahr:0},
   steuersatzMode:'auto',   // 'auto' | 'manual'
-  steuersatzManual:18,     // manual % override
+  steuersatzManual:18,     // manual %  override
   kanton:'BS',
   kinder:1,                // number of children
   kitaTage:2,              // kita days per week per child
   kitaKostenProTag:120,    // CHF per kita day (Basel Stadt ~100-150)
-  kinderzulage:275,        // CHF/month per child
-  saeule3a_i:7258,         // annual 3a contribution person 1
-  saeule3a_p:7258          // annual 3a contribution person 2
+  sparrate3a:7258          // annual 3a contribution (0 if none)
 };
-let income=JSON.parse(JSON.stringify(DEFAULT_INCOME));
-
-// ══ ZENTRALE ANNAHMEN (Schweiz 2026) — Single Source of Truth ══
-const ASSUMPTIONS={
-  AHV_MAX_MT_BASE:2520,   // max. Monatsrente Einzelperson 2026 (ohne 13.)
-  AHV_MIN_MT_BASE:1260,   // min. Monatsrente Einzelperson 2026 (ohne 13.)
-  AHV_MDL_MAX:90720,      // max. massgebendes durchschnittl. Jahreseinkommen 2026
-  AHV_MDL_MIN:15120,      // Untergrenze mdE (Skala 44, 2026)
-  UWS:0.058,              // PK-Umwandlungssatz konservativ
-  UWS_BVG:0.068,          // BVG-Mindestumwandlungssatz
-  MAX_3A:7258,            // Saeule 3a mit PK, 2026
-  INFLATION:2.0,          // Default-Inflation %
-  SWR:3.5                 // Safe Withdrawal Rate % (langer Horizont)
-};
-ASSUMPTIONS.AHV_MAX_MT=Math.round(ASSUMPTIONS.AHV_MAX_MT_BASE*13/12);   // 2730 (12-Schnitt inkl. 13.)
-ASSUMPTIONS.AHV_COUPLE_CAP_MT=Math.round(ASSUMPTIONS.AHV_MAX_MT*1.5);   // 4095 (Ehepaar-Plafonierung 150%)
-
-// Volle AHV-Monatsrente (inkl. 13.) — Naeherung der Skala 44 (2026)
-function ahvRenteVoll(mdE){
-  const MIN=ASSUMPTIONS.AHV_MIN_MT_BASE, MAX=ASSUMPTIONS.AHV_MAX_MT_BASE;
-  const Y0=ASSUMPTIONS.AHV_MDL_MIN, YM=ASSUMPTIONS.AHV_MDL_MAX, YB=45360, RB=1935; // Knickstelle 2026
-  let base;
-  if(mdE<=Y0) base=MIN;
-  else if(mdE>=YM) base=MAX;
-  else if(mdE<=YB) base=MIN+(mdE-Y0)*(RB-MIN)/(YB-Y0);
-  else base=RB+(mdE-YB)*(MAX-RB)/(YM-YB);
-  return base*13/12; // inkl. 13. AHV
-}
-// AHV-Rente einer Person: volle Rente x Beitragsjahre/44
-function ahvRente(mdE, beitragsJahre){
-  return Math.round(ahvRenteVoll(Math.min(mdE||0, ASSUMPTIONS.AHV_MDL_MAX))*Math.min(1,(beitragsJahre||44)/44));
-}
-// Ehepaar-Plafonierung: Summe max. 150% der Maximalrente
-function ahvPlafonieren(mtI, mtP){
-  const cap=ASSUMPTIONS.AHV_COUPLE_CAP_MT, sum=(mtI||0)+(mtP||0);
-  if(sum<=cap) return {i:mtI,p:mtP,total:sum,capped:false};
-  return {i:Math.round((mtI||0)*cap/sum), p:Math.round((mtP||0)*cap/sum), total:cap, capped:true};
-}
-// BVG-Altersgutschrift in % des koordinierten Lohns
-function bvgGutschriftSatz(age){ if(age<25)return 0; if(age<=34)return 0.07; if(age<=44)return 0.10; if(age<=54)return 0.15; return 0.18; }
-function koordinierterLohn(bruttoLohn){
-  const KOORD_ABZUG=26460, MIN=3675, MAX=64260; // BVG 2026
-  const k=Math.max(0,(bruttoLohn||0)-KOORD_ABZUG);
-  return k<=0?0:Math.min(MAX, Math.max(MIN, k));
-}
-function pkGutschriftJahr(age, bruttoLohn){ return Math.round(bvgGutschriftSatz(age)*koordinierterLohn(bruttoLohn)); }
-// Vermoegenssteuer Basel-Stadt (Naeherung, progressiv 4.5-8‰; Vorsorge 2./3. Saeule steuerfrei)
-function estimateVermoegenssteuerBS(netWealth, verheiratet=true){
-  const frei=verheiratet?150000:75000;
-  let rem=Math.max(0,(netWealth||0)-frei);
-  if(rem<=0)return 0;
-  let tax=0;
-  const brackets=[[500000,0.0045],[500000,0.006],[1000000,0.007],[Infinity,0.008]];
-  for(const [width,rate] of brackets){ if(rem<=0)break; const amt=Math.min(rem,width); tax+=amt*rate; rem-=amt; }
-  return Math.round(tax);
-}
-// Steuerbares (freies) Vermoegen = Nicht-Vorsorge-Positionen im letzten Monat
-function getTaxableWealth(){
-  const ms=sortMs(Object.keys(db||{}).filter(m=>!hiddenMonths.has(m)));
-  const lastM=ms.length?ms[ms.length-1]:null;
-  if(!lastM)return 0;
-  let free=0;
-  ['ich','partner','kinder'].forEach(p=>{
-    const e=db[lastM]?.[p]||{};
-    getCats().forEach(g=>g.items.forEach(it=>{
-      const v=e[it.id]; if(typeof v==='number'&&v!==0&&itemVorsorge(g.id,it.id)==='free') free+=v;
-    }));
-  });
-  return Math.max(0,free);
-}
 let budgetMode='gemeinsam'; // 'gemeinsam' | 'getrennt'
 let bpTab='plan'; // 'plan' | 'ist' | 'verlauf'
 let bpIstMonth=''; // currently selected month for Ist-Eingabe
+
+// ══ INCOME DEFAULTS & MIGRATION ══
+function defaultIncome(){return{p1:{bruttoJahr:120000,pensum:100,bonusJahr:0},p2:{bruttoJahr:80000,pensum:80,bonusJahr:0},steuersatzMode:'auto',steuersatzManual:18,kanton:'BS',kinder:1,kitaTage:2,kitaKostenProTag:120,kinderzulage:275,sparrate3a:7258,saeule3a_i:7258,saeule3a_p:7258}}
+function migrateIncome(inc){
+  const d=defaultIncome();if(!inc||typeof inc!=='object')return d;
+  const o=JSON.parse(JSON.stringify(inc));
+  ['p1','p2'].forEach(k=>{
+    const p=o[k]||{};
+    if(p.bruttoJahr===undefined)p.bruttoJahr=(p.lohn100!==undefined?p.lohn100:d[k].bruttoJahr);
+    if(p.pensum===undefined)p.pensum=d[k].pensum;
+    if(p.bonusJahr===undefined)p.bonusJahr=0;
+    delete p.lohn100;delete p.kinder;o[k]=p;
+  });
+  Object.keys(d).forEach(k=>{if(k!=='p1'&&k!=='p2'&&o[k]===undefined)o[k]=d[k]});
+  return o;
+}
 
 // ══ CRYPTO ══
 const ENC=new TextEncoder(),DEC=new TextDecoder();
@@ -1715,9 +1660,6 @@ function ss(s,t){document.getElementById('sdot').className='sdot '+s;document.ge
 let undoStack=[];
 const MAX_UNDO=5;
 
-function collectFullState(){
-  return {db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
-}
 function snapshotState(){
   // Capture current state for undo
   return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes}));
@@ -1763,8 +1705,6 @@ async function undoLast(){
   if(prev.positions)positions=JSON.parse(JSON.stringify(prev.positions));
   if(prev.targetAllocation)targetAllocation=JSON.parse(JSON.stringify(prev.targetAllocation));
   if(prev.projParams)projParams=JSON.parse(JSON.stringify(prev.projParams));
-  if(prev.actualBudget)actualBudget=JSON.parse(JSON.stringify(prev.actualBudget));
-  if(prev.actualBudgetNotes)actualBudgetNotes=JSON.parse(JSON.stringify(prev.actualBudgetNotes));
   // Push the reverted state
   // Skip the snapshot push for the undo itself
   const skipSnapshot=true;
@@ -1854,7 +1794,7 @@ function applyFull(full){
     partner:{gebJahr:1990,rentenalter:64,lohn:80000,arbJahre:38,pk:80000,pkBeitrag:18000,pkRendite:3,s3:0}
   };
   budget=full.budget||null;
-  income=full.income?{...JSON.parse(JSON.stringify(DEFAULT_INCOME)),...full.income}:JSON.parse(JSON.stringify(DEFAULT_INCOME));
+  income=migrateIncome(full.income);
   budgetMode=full.budgetMode||'gemeinsam';
   positions=full.positions||{};
   targetAllocation=full.targetAllocation||{
@@ -3007,7 +2947,7 @@ async function resetSetup(){
     byCurrency:{chf:30,usd:40,eur:20,other:10}
   };
   budget=null;
-  income={...JSON.parse(JSON.stringify(DEFAULT_INCOME)),kinder:0,kitaTage:0};
+  income=defaultIncome();
   budgetMode='gemeinsam';
   projParams={rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
   actualBudget={};
@@ -3053,7 +2993,7 @@ function launch(){
       }
     }
     // Also skip if any debounced save is pending — those are about to push
-    if(window._incomeSaveTimer||window._projSaveTimer||window._budgetSaveTimer)return;
+    if(window._incomeSaveTimer||window._projSaveTimer||window._budgetSaveTimer||window._abSaveTimer)return;
     await pullAll();refreshPage();
   },60000);
 }
@@ -3079,6 +3019,8 @@ async function goTo(p){
   if(window._incomeSaveTimer){clearTimeout(window._incomeSaveTimer);window._incomeSaveTimer=null;pending=true}
   if(window._projSaveTimer){clearTimeout(window._projSaveTimer);window._projSaveTimer=null;pending=true}
   if(window._budgetSaveTimer){clearTimeout(window._budgetSaveTimer);window._budgetSaveTimer=null;pending=true}
+  if(window._abSaveTimer){clearTimeout(window._abSaveTimer);window._abSaveTimer=null;pending=true}
+  if(window._bpRenderTimer){clearTimeout(window._bpRenderTimer);window._bpRenderTimer=null}
   if(pending){try{await pushAll()}catch(e){console.warn('Save on navigation failed:',e)}}
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(x=>x.classList.remove('active'));
@@ -3811,14 +3753,14 @@ function selectMonth(m){
   else renderForm();
 }
 async function deleteMonthFromList(m){
-  if(!confirm(`Monat ${fmtM(m)} komplett löschen (beide Personen)?`))return;
+  if(!await confirmX(`Monat ${fmtM(m)} komplett löschen (beide Personen)?`))return;
   delete db[m];delete notes[m];
   if(currentEntryMonth===m)currentEntryMonth=sortMs(Object.keys(db)).pop()||'';
   await pushAll();renderEingabeNav();renderForm();
 }
 async function deleteCurrentMonth(){
   const m=currentEntryMonth;if(!m||!db[m])return;
-  if(!confirm(`Monat ${fmtM(m)} komplett löschen?`))return;
+  if(!await confirmX(`Monat ${fmtM(m)} komplett löschen?`))return;
   delete db[m];delete notes[m];
   currentEntryMonth=sortMs(Object.keys(db)).pop()||currentEntryMonth;
   await pushAll();renderEingabeNav();renderForm();
@@ -4220,18 +4162,39 @@ function popDashSel(){
   sel.innerHTML=ms.map(m=>`<option value="${m}">${fmtM(m)}</option>`).join('');
   if(cur&&ms.includes(cur))sel.value=cur;else if(ms.length)sel.value=ms[ms.length-1];
 }
+// Einheitlicher Referenzmonat fuer alle Vergleiche im Konten-Tab
+function getCompareMonth(period,month,ms,view){
+  const mi=ms.indexOf(month);
+  if(mi<=0)return null;
+  let ref=null,truncated=false;
+  if(period==='month'){ref=ms[mi-1]}
+  else if(period==='6m'||period==='12m'){
+    const n=period==='6m'?6:12;
+    const fi=Math.max(0,mi-n);truncated=(mi-n)<0;ref=ms[fi];
+  }else if(period==='ytd'){
+    const prevDec=`${parseInt(month.split('-')[0])-1}-12`;
+    const cand=ms.filter(m=>m<=prevDec).pop();
+    ref=cand||ms[0];truncated=!cand;
+  }
+  if(!ref||ref===month)return null;
+  return{month:ref,truncated};
+}
 function renderGainCards(activePer,month,ms,mi,t){
   const vw=currentView;
-  const gT=m=>getT(m,vw);
-  let prev=null,label='';
-  if(activePer==='month'){prev=mi>0?gT(ms[mi-1]):null;label='vs. '+fmtM(mi>0?ms[mi-1]:'–')}
-  else if(activePer==='6m'){const fi=Math.max(0,mi-5);prev=gT(ms[fi]);label='vs. '+fmtM(ms[fi])}
-  else if(activePer==='12m'){const fi=Math.max(0,mi-11);prev=gT(ms[fi]);label='vs. '+fmtM(ms[fi])}
-  else if(activePer==='ytd'){const s=ytdStart(month,vw);prev=gT(s);label='vs. '+fmtM(s)}
+  const cmp=getCompareMonth(activePer,month,ms,vw);
+  const prev=cmp?getT(cmp.month,vw):null;
+  const label=cmp?('vs. '+fmtM(cmp.month)+(cmp.truncated?' (ältester verfügbarer)':'')):'kein Vergleichsmonat';
   const gc=(curr,pv,lbl)=>{if(pv==null)return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v mut">—</div></div>`;const d=curr-pv,p=pv?((d/pv)*100).toFixed(1):0;return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${fmt(d)}</div><div class="gc-s ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${p}%</div></div>`};
   document.getElementById('gain-body').innerHTML=`<div class="gain-grid">${gc(t.gesamt,prev?.gesamt,'Gesamtvermögen')}${gc(t.cash,prev?.cash,'Cash')}${gc(t.anlagen,prev?.anlagen,'Anlagen')}</div>`;
 }
-function switchGP(p,btn){document.querySelectorAll('.gpb').forEach(b=>b.classList.remove('active'));btn.classList.add('active');const ms=validMonths(currentView);const sel=document.getElementById('dash-sel');const month=sel.value||ms[ms.length-1];renderGainCards(p,month,ms,ms.indexOf(month),getT(month))}
+function switchGP(p,btn){
+  gainPeriod=p;
+  document.querySelectorAll('.gpb').forEach(b=>b.classList.toggle('active',b===btn));
+  const ms=validMonths(currentView);const sel=document.getElementById('dash-sel');
+  const month=sel.value||ms[ms.length-1];const t=getT(month);
+  renderGainCards(p,month,ms,ms.indexOf(month),t);
+  renderCatCards(month,mgd(month),t,currentView);
+}
 function renderDash(){
   const ms=validMonths(currentView);const body=document.getElementById('dash-body');
   updatePersonLabels();
@@ -4254,7 +4217,7 @@ function renderDash(){
     metricsH=`<div class="mr mc2"><div class="mc hero"><div class="mc-l">${pName} · Vermögen (ohne PK)</div><div class="mc-v blur-val">${fmt(t.gesamt)}</div>${delta!==null?`<div class="mc-d ${delta>=0?'pos':'neg'} blur-val">${delta>=0?'+':''}${fmt(delta)} · ${dPct}%</div>`:'<div class="mc-s mut">Erster Eintrag</div>'}</div>
       <div class="mc"><div class="mc-l">Investiert</div><div class="mc-v blur-val">${fmt(pE.investiert)}</div><div class="mc-s mut blur-val">${fmt(pE.einkommen)} Einkommen</div></div></div>`;
   }
-  const gainExtra=`<div class="gpb-row"><button class="gpb active" onclick="switchGP('month',this)">1M</button><button class="gpb" onclick="switchGP('6m',this)">6M</button><button class="gpb" onclick="switchGP('12m',this)">12M</button><button class="gpb" onclick="switchGP('ytd',this)">YTD</button></div>`;
+  const gainExtra=`<div class="gpb-row">${[['month','1M'],['6m','6M'],['12m','12M'],['ytd','YTD']].map(([k,l])=>`<button class="gpb ${gainPeriod===k?'active':''}" onclick="switchGP('${k}',this)">${l}</button>`).join('')}</div>`;
   const note=notes[month];
   let h=metricsH;
   h+=mkWidget('gain','Wertzuwachs','<div id="gain-body"></div>',gainExtra);
@@ -4264,7 +4227,7 @@ function renderDash(){
   // Verlauf is now in Übersicht → Verlauf tab — removed from Konten
   body.innerHTML=h;
   ['gain','alloc'].forEach(id=>{if(widgetState[id]){const el=document.getElementById('w-'+id);if(el){el.classList.add('collapsed');const t=el.querySelector('.widget-toggle');if(t)t.textContent='▶'}}});
-  renderGainCards('month',month,ms,mi,t);
+  renderGainCards(gainPeriod,month,ms,mi,t);
   renderCatCards(month,e,t,currentView);
 
   // Enhanced Allocation view — expandable sections
@@ -4465,7 +4428,12 @@ function renderCatCards(month,e,t,view){
   const ms=aMs(),mi=ms.indexOf(month);
   const eI=db[month]?.ich||{},eP=db[month]?.partner||{},eK=db[month]?.kinder||{};
 
-  const prevMonth=mi>0?ms[mi-1]:null;
+  const cmp=getCompareMonth(gainPeriod,month,validMonths(view),view);
+  const prevMonth=cmp?cmp.month:null;
+  const cmpLbl=prevMonth?'vs. '+fmtM(prevMonth)+(cmp.truncated?' (ältester verfügbarer)':''):'';
+  const secDelta=(d,pv)=>d===null?'':`<div class="blur-val" style="font-size:9.5px;color:${d>=0?'var(--gr)':'var(--rd)'};font-family:var(--fm)">${d>=0?'+':''}${fmt(d)}${pv>0?' ('+(d>=0?'+':'')+(d/pv*100).toFixed(1)+'%)':''}</div><div style="font-size:8.5px;color:var(--tx3);font-family:var(--fm)">${cmpLbl}</div>`;
+  const gvOf=(key,mth)=>{const d=db[mth];if(!d)return null;const ps=view==='p1'?['ich']:view==='p2'?['partner']:(settings.kinderEnabled?['ich','partner','kinder']:['ich','partner']);let s=0,has=false;ps.forEach(p=>{const v=d[p]?.['gv_'+key];if(typeof v==='number'){s+=v;has=true}});return has?s:null};
+  const gvLine=item=>{if(!item.trackPerformance||!prevMonth)return '';const g1=gvOf(item.id,month),g0=gvOf(item.id,prevMonth);if(g1===null||g0===null)return '';const dg=g1-g0;return `<div class="blur-val" style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:1px">G/V-Veränderung: <span style="color:${dg>=0?'var(--gr)':'var(--rd)'}">${dg>=0?'+':''}${fmt(dg)}</span></div>`};
   const prevDb=prevMonth?db[prevMonth]:null;
   const prevI=prevDb?.ich||{},prevP=prevDb?.partner||{},prevK=prevDb?.kinder||{};
 
@@ -4474,7 +4442,7 @@ function renderCatCards(month,e,t,view){
   const getPrevVal=(key)=>!prevMonth?null:(view==='p1'?(prevI[key]||0):view==='p2'?(prevP[key]||0):((prevI[key]||0)+(prevP[key]||0)+(prevK[key]||0)));
 
   const fmtD=(v,c='var(--tx)')=>`<span class="blur-val" style="font-family:var(--fm);color:${c}">${fmt(v)}</span>`;
-  const fmtDelta=(cur,prev)=>{if(prev===null||prev===undefined)return '';const d=cur-prev;return d===0?'':`<span class="blur-val" style="font-size:9.5px;color:${d>0?'var(--gr)':'var(--rd)'};font-family:var(--fm);margin-left:4px">${d>0?'+':''}${fmt(d)}</span>`;};
+  const fmtDelta=(cur,prev)=>{if(prev===null||prev===undefined)return '';const d=cur-prev;if(d===0)return '';const pc=prev>0?' ('+(d>0?'+':'')+(d/prev*100).toFixed(1)+'%)':'';return `<span class="blur-val" style="font-size:9.5px;color:${d>0?'var(--gr)':'var(--rd)'};font-family:var(--fm);margin-left:4px">${d>0?'+':''}${fmt(d)}${pc}</span>`;};
 
   // ── Section builder ──
   function mkSection(icon, title, color, items, total, prevTotal){
@@ -4493,7 +4461,7 @@ function renderCatCards(month,e,t,view){
           </div>
         </div>
         <div style="text-align:right">
-          ${fmtD(total,color)}${delta!==null?`<div style="font-size:9.5px;color:${delta>=0?'var(--gr)':'var(--rd)'};font-family:var(--fm)">${delta>=0?'+':''}${fmt(delta)}</div>`:''}
+          ${fmtD(total,color)}${secDelta(delta,prevTotal)}
         </div>
       </div>
       ${gesamtRef>0?`<div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:8px 0 2px"><div style="height:100%;width:${(total/gesamtRef*100).toFixed(1)}%;background:${color};border-radius:2px"></div></div><div style="font-size:9px;color:var(--tx3);font-family:var(--fm);text-align:right">${(total/gesamtRef*100).toFixed(1)}% des Vermögens</div>`:''}`;
@@ -4512,6 +4480,7 @@ function renderCatCards(month,e,t,view){
             <div style="display:flex;align-items:center;gap:4px">${fmtD(val)}${fmtDelta(val,pv)}</div>
           </div>
           ${val>0&&total>0?`<div style="height:2px;background:var(--bg3);border-radius:1px;overflow:hidden"><div style="height:100%;width:${ibar}%;background:${color};opacity:0.4;border-radius:1px"></div></div>`:''}
+          ${gvLine(item)}
           ${view==='gesamt'&&ich>0&&par>0?`<div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:1px"><span style="color:#60a5fa" class="blur-val">${n1()}: ${fmt(ich)}</span> · <span style="color:#a78bfa" class="blur-val">${n2()}: ${fmt(par)}</span></div>`:''}
         </div>`;
       });
@@ -4519,6 +4488,7 @@ function renderCatCards(month,e,t,view){
     } else {
       const item=items[0];
       const ich=eI[item.id]||0,par=eP[item.id]||0;
+      html+=gvLine(item);
       if(view==='gesamt'&&ich>0&&par>0){
         html+=`<div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:6px"><span style="color:#60a5fa" class="blur-val">${n1()}: ${fmt(ich)}</span> · <span style="color:#a78bfa" class="blur-val">${n2()}: ${fmt(par)}</span></div>`;
       }
@@ -4557,22 +4527,22 @@ function renderCatCards(month,e,t,view){
     cont.insertAdjacentHTML('beforeend',`<div style="display:grid;grid-template-columns:${[1,1,s3aTot>0?1:0,pkTot>0?1:0].filter(x=>x).map(()=>'1fr').join(' ')};gap:8px;margin-bottom:14px">
       <div style="background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.2);border-radius:10px;padding:11px 13px">
         <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">💵 Cash</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--bl)">${fmt(cashTot)}</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--bl)">${fmt(cashTot)}</div>${secDelta(prevCash!==null?cashTot-prevCash:null,prevCash)}
         <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${freeTot>0?(cashTot/freeTot*100).toFixed(0):'0'}%</div>
       </div>
       <div style="background:rgba(74,222,128,0.07);border:1px solid rgba(74,222,128,0.2);border-radius:10px;padding:11px 13px">
         <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">📈 Anlagen</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--gr)">${fmt(anlTot)}</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--gr)">${fmt(anlTot)}</div>${secDelta(prevAnl!==null?anlTot-prevAnl:null,prevAnl)}
         <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">${freeTot>0?(anlTot/freeTot*100).toFixed(0):'0'}%</div>
       </div>
       ${s3aTot>0?`<div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:11px 13px">
         <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">🏦 Säule 3a</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--am)">${fmt(s3aTot)}</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--am)">${fmt(s3aTot)}</div>${secDelta(prevS3a!==null?s3aTot-prevS3a:null,prevS3a)}
         <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">ab ~60</div>
       </div>`:''}
       ${pkTot>0?`<div style="background:rgba(167,139,250,0.07);border:1px solid rgba(167,139,250,0.2);border-radius:10px;padding:11px 13px">
         <div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">🏛 PK</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--vi)">${fmt(pkTot)}</div>
+        <div class="blur-val" style="font-family:var(--fm);font-size:14px;font-weight:500;color:var(--vi)">${fmt(pkTot)}</div>${secDelta(prevPK!==null?pkTot-prevPK:null,prevPK)}
         <div style="font-size:9.5px;color:var(--tx3);margin-top:2px">ab ~60 · ~${fmt(calcPKRente(pkTot))}/Mt</div>
       </div>`:''}
     </div>`);
@@ -5265,30 +5235,23 @@ function calcRente(){
   // Mindestrente CHF 1'260 gilt NUR bei vollständiger Beitragszeit (44 Jahre)
   // Bei unvollständiger Beitragszeit gibt es KEINE Mindestrente — rein proportional
   const quotient=Math.min(1, pa.arbJahre/44);
-  const mdl=Math.min(pa.lohn, ASSUMPTIONS.AHV_MDL_MAX); // max. massgebender Lohn 2026: 90'720
-  // Vollrente inkl. 13. AHV (Naeherung Skala 44 2026)
-  const vollrenteBrutto=Math.round(ahvRenteVoll(mdl));
-  // Proportional nach Beitragsjahren kuerzen
-  const ahvMonatlich=ahvRente(mdl, pa.arbJahre);
-  // Ehepaar-Plafonierung (150% der Maximalrente kombiniert)
-  const _other=p==='ich'?'partner':'ich';
-  const _opa=renteParams[_other]||{};
-  const ahvPartnerMt=ahvRente(Math.min(_opa.lohn||0,ASSUMPTIONS.AHV_MDL_MAX), _opa.arbJahre||44);
-  const ahvPlaf=ahvPlafonieren(ahvMonatlich, ahvPartnerMt);
+  const mdl=Math.min(pa.lohn, 88200); // Maximaler massgeblicher Lohn 2025
+  // Vollrente berechnen (bei 44 Bj, Lohn = mdl)
+  const vollrenteBrutto=Math.min(2520, Math.max(1260, Math.round(0.325*mdl + 793)));
+  // Proportional kürzen — kein Minimum bei unvollständiger Beitragszeit
+  const ahvMonatlich=Math.round(vollrenteBrutto * quotient);
 
   // ── SÄULE 2: PK ──
   const pkR=pa.pkRendite/100;
-  const nowAge0=nowY-(pa.gebJahr||1985);
-  let pkFinal=pa.pk;
-  for(let y=0;y<yearsLeft;y++){ const ageY=nowAge0+y; pkFinal=pkFinal*(1+pkR)+Math.max(pa.pkBeitrag||0, pkGutschriftJahr(ageY, pa.lohn)); }
+  let pkFinal=pa.pk;for(let y=0;y<yearsLeft;y++)pkFinal=pkFinal*(1+pkR)+pa.pkBeitrag;
   pkFinal=Math.round(pkFinal);
   // Umwandlungssatz (UWS):
   // 6.8% = gesetzlicher BVG-Mindestsatz für obligatorischen Teil (Lohn CHF 25'725–88'200)
   // Bei überobligatorischen Guthaben (hohe Löhne) wenden PKs oft 5.0–5.5% an
   // Effektiver Gesamt-UWS liegt je nach PK typisch zwischen 5.5% und 6.8%
   // Wir zeigen beide: den gesetzlichen Mindestsatz und einen realistischeren Satz
-  const uws_bvg=ASSUMPTIONS.UWS_BVG;    // BVG-Obligatorium (gesetzlich)
-  const uws_effektiv=ASSUMPTIONS.UWS;   // Realistisch (gemischte Guthaben)
+  const uws_bvg=0.068;    // BVG-Obligatorium (gesetzlich)
+  const uws_effektiv=0.055; // Realistisch für gemischte Guthaben (Über-/Obligatorium)
   const pkRenteBVG=Math.round(pkFinal*uws_bvg/12);      // Obere Schranke
   const pkRenteKonserv=Math.round(pkFinal*uws_effektiv/12); // Realistischerer Wert
 
@@ -5296,8 +5259,8 @@ function calcRente(){
   const ms=aMs();const lastM=ms.length?ms[ms.length-1]:null;
   const viacVal=lastM?(db[lastM]?.[p]?.viac||0):0;
   const s3base=pa.s3||viacVal;
-  // Annahme: VIAC bis Pensionierung mit 5% Rendite, max Saeule-3a-Einzahlung
-  const maxS3Einzahlung=ASSUMPTIONS.MAX_3A;// 2026: 7'258
+  // Annahme: VIAC bis Pensionierung mit 5% Rendite, max CHF 7'056/J Einzahlung
+  const maxS3Einzahlung=7258;// 2025
   let s3Final=s3base;for(let y=0;y<yearsLeft;y++)s3Final=s3Final*1.05+maxS3Einzahlung;
   s3Final=Math.round(s3Final);
   // 3a Kapitalbezug, kein Rentenanspruch → verteilt auf 20J Lebenserwartung post-Pension
@@ -5314,10 +5277,10 @@ function calcRente(){
   <div class="renten-title" style="margin-bottom:10px">Prognose ${pName} — Renteneintritt ca. ${nowY+yearsLeft} (Alter ${pa.rentenalter}), noch ${yearsLeft} Jahre</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
     <div class="renten-result-card hero">
-      <div class="renten-result-lbl">Realistisch (UWS 5.8%, empfohlen)</div>
+      <div class="renten-result-lbl">Realistisch (UWS 5.5%, empfohlen)</div>
       <div class="renten-result-val blur-val" style="color:var(--gr)">${fmt(totalRealistisch)}</div>
       <div class="renten-result-sub blur-val">Netto ca. ${fmt(netRealistisch)} / Monat nach Steuern</div>
-      <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:5px">Umwandlungssatz 5.8% — für PKs mit überobligatorischem Anteil (hohe Löhne) realistischer</div>
+      <div style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:5px">Umwandlungssatz 5.5% — für PKs mit überobligatorischem Anteil (hohe Löhne) realistischer</div>
     </div>
     <div class="renten-result-card normal">
       <div class="renten-result-lbl">Obere Schranke (UWS 6.8% BVG-Gesetz)</div>
@@ -5333,7 +5296,7 @@ function calcRente(){
       <div class="saule-val blur-val" style="color:var(--bl)">${fmt(ahvMonatlich)}/Mt.</div>
       <div class="saule-sub">${pa.arbJahre} von 44 Beitragsjahren = ${(pa.arbJahre/44*100).toFixed(0)}%</div>
       <div class="saule-sub" style="margin-top:3px;color:var(--am)">⚠ ${pa.arbJahre<44?'Fehlende '+(44-pa.arbJahre)+' J. kürzen die Rente um '+fmt(Math.round(vollrenteBrutto*(44-pa.arbJahre)/44)):'Vollrente erreicht'}</div>
-      <div class="saule-sub" style="margin-top:3px">Vollrente wäre: ${fmt(vollrenteBrutto)}/Mt.</div>${ahvPlaf.capped?`<div class="saule-sub" style="color:var(--am);margin-top:3px">⚠ Als Ehepaar plafoniert: kombiniert max ${fmt(ASSUMPTIONS.AHV_COUPLE_CAP_MT)}/Mt. — dein Anteil ca. ${fmt(ahvPlaf.i)}</div>`:''}
+      <div class="saule-sub" style="margin-top:3px">Vollrente wäre: ${fmt(vollrenteBrutto)}/Mt.</div>
       <div class="saule-sub">Ø-Lohn Basis: CHF ${(pa.lohn/1000).toFixed(0)}k</div>
     </div>
     <div class="saule-card">
@@ -5342,7 +5305,7 @@ function calcRente(){
       <div class="saule-sub" style="margin-top:3px">PK-Kapital heute: ${fmt(pa.pk)}</div>
       <div class="saule-sub">Prognose Kapital: ${fmt(pkFinal)}</div>
       <div class="saule-sub" style="margin-top:3px">Bei ${pa.pkRendite}% Rendite über ${yearsLeft} J.</div>
-      <div class="saule-sub" style="margin-top:3px">UWS 5.8% (realistisch): ${fmt(pkRenteKonserv)}/Mt.</div>
+      <div class="saule-sub" style="margin-top:3px">UWS 5.5% (realistisch): ${fmt(pkRenteKonserv)}/Mt.</div>
       <div class="saule-sub">UWS 6.8% (BVG-Max): ${fmt(pkRenteBVG)}/Mt.</div>
     </div>
     <div class="saule-card">
@@ -5358,10 +5321,10 @@ function calcRente(){
   <div class="widget">
     <div class="widget-hd"><span class="widget-title">Vergleich verschiedener Rentenalter</span></div>
     <div class="widget-body"><div style="overflow-x:auto"><table class="dtbl">
-      <thead><tr><th>Alter</th><th>PK-Kapital</th><th>AHV/Mt.</th><th>PK/Mt. (5.8%)</th><th>3a/Mt.</th><th>Total brutto</th><th>Netto ~85%</th></tr></thead>
+      <thead><tr><th>Alter</th><th>PK-Kapital</th><th>AHV/Mt.</th><th>PK/Mt. (5.5%)</th><th>3a/Mt.</th><th>Total brutto</th><th>Netto ~85%</th></tr></thead>
       <tbody>${[60,62,64,65,67,70].map(a=>{
         const yL=Math.max(0,(pa.gebJahr+a)-nowY);
-        let pk=pa.pk;for(let y=0;y<yL;y++){const ageY=nowAge0+y;pk=pk*(1+pkR)+Math.max(pa.pkBeitrag||0,pkGutschriftJahr(ageY,pa.lohn));}pk=Math.round(pk);
+        let pk=pa.pk;for(let y=0;y<yL;y++)pk=pk*(1+pkR)+pa.pkBeitrag;pk=Math.round(pk);
         const pkM=Math.round(pk*uws_effektiv/12);
         let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;
         const s3M=Math.round(s3/20/12);
@@ -5378,8 +5341,8 @@ function calcRente(){
   dC('rente');const nowY2=new Date().getFullYear();
   const ages=[55,58,60,62,64,65,67,70].filter(a=>a>=pa.rentenalter-5&&a<=pa.rentenalter+5);
   const renteData=ages.map(a=>{
-    const yL=Math.max(0,(pa.gebJahr+a)-nowY2);let pk=pa.pk;for(let y=0;y<yL;y++){const ageY=nowAge0+y;pk=pk*(1+pkR)+Math.max(pa.pkBeitrag||0,pkGutschriftJahr(ageY,pa.lohn));}pk=Math.round(pk);
-    const pkM=Math.round(pk*ASSUMPTIONS.UWS/12);let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;const s3M=Math.round(s3/20/12);
+    const yL=Math.max(0,(pa.gebJahr+a)-nowY2);let pk=pa.pk;for(let y=0;y<yL;y++)pk=pk*(1+pkR)+pa.pkBeitrag;pk=Math.round(pk);
+    const pkM=Math.round(pk*uws_bvg/12);let s3=s3base;for(let y=0;y<yL;y++)s3=s3*1.05+maxS3Einzahlung;const s3M=Math.round(s3/20/12);
     return{ahv:ahvMonatlich,pk:pkM,s3:s3M};
   });
 }
@@ -5413,7 +5376,7 @@ function budgetTotals(){
 }
 
 async function resetBudgetDefaults(){
-  if(!confirm('Budget auf Standardwerte zurücksetzen? Alle eingetragenen Beträge gehen verloren.'))return;
+  if(!await confirmX('Budget auf Standardwerte zurücksetzen? Alle eingetragenen Beträge gehen verloren.'))return;
   budget=JSON.parse(JSON.stringify(BUDGET_DEFAULT));
   await pushAll();
   renderBudget();
@@ -5492,14 +5455,14 @@ async function updBudgetCatLabel(ci, label){
 async function delBudgetCat(ci){
   const b=getBudget();
   if(!b[ci])return;
-  if(!confirm(`Kategorie "${b[ci].label}" komplett löschen? Alle Positionen gehen verloren.`))return;
+  if(!await confirmX(`Kategorie "${escapeHTML(b[ci].label)}" komplett löschen? Alle Positionen gehen verloren.`))return;
   b.splice(ci,1);
   await pushAll();
   renderBudget();
 }
 
 async function addBudgetCategory(){
-  const name=prompt('Name der neuen Kategorie:');
+  const name=await promptX('Name der neuen Kategorie:','',{title:'Neue Kategorie'});
   if(!name||!name.trim())return;
   const b=getBudget();
   b.push({id:'cat_'+rndH(4), label:name.trim(), icon:'📦', items:[]});
@@ -5579,8 +5542,8 @@ async function updBudgetAmt(ci,ii,field,val){
     if(totEl)totEl.textContent=fmt(tot);
   }
   // debounce save
-  if(budgetSaveTimer)clearTimeout(budgetSaveTimer);
-  budgetSaveTimer=setTimeout(()=>pushAll(),700);
+  if(window._budgetSaveTimer)clearTimeout(window._budgetSaveTimer);
+  window._budgetSaveTimer=setTimeout(async()=>{window._budgetSaveTimer=null;await pushAll()},700);
 }
 
 async function setBudgetItemType(ci,ii,type){
@@ -5594,7 +5557,7 @@ async function setBudgetItemType(ci,ii,type){
 async function delBudgetItem(ci,ii){
   const b=getBudget();
   if(!b[ci]||!b[ci].items[ii])return;
-  if(!confirm(`"${b[ci].items[ii].label}" löschen?`))return;
+  if(!await confirmX(`"${escapeHTML(b[ci].items[ii].label)}" löschen?`))return;
   b[ci].items.splice(ii,1);
   await pushAll();
   renderBudget();
@@ -5604,7 +5567,7 @@ async function addBudgetItem(catId){
   const b=getBudget();
   const cat=b.find(c=>c.id===catId);
   if(!cat)return;
-  const name=prompt('Name der neuen Position:');
+  const name=await promptX('Name der neuen Position:','',{title:'Neue Position'});
   if(!name||!name.trim())return;
   cat.items.push({id:'bi_'+rndH(4),label:name.trim(),type:'var',amt:0,amt_p1:0,amt_p2:0});
   await pushAll();
@@ -5625,7 +5588,7 @@ async function addBudgetItem(catId){
 // Für Singles höher (kein Splitting): ~4-5 Prozentpunkte mehr
 const SOZIALABZUEGE_PCT=0.12; // AHV + ALV + NBU + moderater BVG-Beitrag
 
-function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true, saeule3a=0){
+function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true){
   // Realistic effective combined tax rate (Cantonal+Federal) for Basel-Stadt
   // Progressive calculation with proper deductions
   // Based on BS Staffelung 2024 + Bundessteuer DBG
@@ -5640,7 +5603,7 @@ function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true, saeule3a=0){
   const verheiratetenAbzug=istVerheiratet?1300:0;
 
   // Steuerbares Einkommen
-  let steuerbar=Math.max(0, bruttoJahr - sozialAbzug - bvgAbzug - pauschalAbzug - kinderAbzug - versAbzug - verheiratetenAbzug - (saeule3a||0));
+  let steuerbar=Math.max(0, bruttoJahr - sozialAbzug - bvgAbzug - pauschalAbzug - kinderAbzug - versAbzug - verheiratetenAbzug);
 
   // BS Kantonssteuer Staffelung 2024 (Verheiratete): grobe Schätzung
   // Tarif für Splitting (Verheiratete): grosszügiger als Singles
@@ -5695,7 +5658,7 @@ function calcPersonNetto(p, kinder){
   }else{
     // Auto: Haushalts-Brutto als Basis (splitting für Ehepaar)
     const totalHouseholdBrutto = (income.p1.bruttoJahr*income.p1.pensum/100+(income.p1.bonusJahr||0)) + (income.p2.bruttoJahr*income.p2.pensum/100+(income.p2.bonusJahr||0));
-    steuerPct = estimateSteuerBS(totalHouseholdBrutto, kinder, true, (income.saeule3a_i||0)+(income.saeule3a_p||0));
+    steuerPct = estimateSteuerBS(totalHouseholdBrutto, kinder, true);
   }
   // Steuer wird auf die eigene Brutto-Basis angewendet (Haushalts-Steuersatz mal eigener Anteil)
   const steuer = bruttoEff * steuerPct;
@@ -5779,7 +5742,6 @@ function renderBpPlan(){
   const fixPctOfNetto = hh.nettoMonat>0?(bt.fix/hh.nettoMonat*100):0;
 
   const avgSteuerPct = ((hh.p1.steuerPct+hh.p2.steuerPct)/2*100);
-  const vermSteuerJahr = estimateVermoegenssteuerBS(getTaxableWealth(), (budgetMode!=='getrennt'));
 
   let h=`
   <!-- HERO: 3 big metrics -->
@@ -5813,7 +5775,6 @@ function renderBpPlan(){
         <span class="bp-hero-mini-lbl" style="color:var(--am)">● Variabel</span>
         <span class="bp-hero-mini-val blur-val">${fmt(bt.var)}</span>
       </div>
-      ${vermSteuerJahr>0?`<div class="bp-hero-mini"><span class="bp-hero-mini-lbl" style="color:var(--tx3)">Vermögenssteuer BS</span><span class="bp-hero-mini-val blur-val">${fmt(Math.round(vermSteuerJahr/12))}</span></div>`:''}
       ${kitaExtra>0?`<div class="bp-hero-mini"><span class="bp-hero-mini-lbl" style="color:var(--vi)">● Kita (extra)</span><span class="bp-hero-mini-val blur-val">${fmt(kitaExtra)}</span></div>`:''}
     </div>
     <div class="bp-hero-card ${ueberschussMonat>=0?'primary':'negative'}">
@@ -6774,122 +6735,17 @@ function renderBpIst(){
   body.innerHTML=h;
 }
 
-function buildIstJahresHochrechnung(){
-  const months=Object.keys(actualBudget).filter(m=>Object.keys(actualBudget[m]).length>0).sort();
-  if(months.length<2)return '';
-  const cats=getBudgetCats();
 
-  // Average Ist per category over recorded months
-  const avgs=cats.map(cat=>{
-    const vals=months.map(m=>actualBudget[m]?.[cat.id]||0).filter(v=>v>0);
-    const avg=vals.length>0?vals.reduce((s,v)=>s+v,0)/vals.length:0;
-    return {...cat, avgIst:avg, avgPlan:cat.plan};
-  });
-
-  const totalAvgIst=avgs.reduce((s,c)=>s+c.avgIst,0);
-  const totalPlan=avgs.reduce((s,c)=>s+c.avgPlan,0);
-  const yearDiff=(totalAvgIst-totalPlan)*12;
-
-  return `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--bdr)">
-    <div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:10px">
-      Jahres-Hochrechnung (${months.length} Monate Basis)
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Ø Ist/Mt</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx)">${fmt(totalAvgIst)}</div>
-      </div>
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Plan/Mt</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:var(--tx2)">${fmtN(totalPlan)}</div>
-      </div>
-      <div style="background:var(--bg3);border-radius:10px;padding:11px 13px">
-        <div style="font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Δ /Jahr</div>
-        <div class="blur-val" style="font-family:var(--fm);font-size:15px;font-weight:500;color:${yearDiff<=0?'var(--gr)':'var(--rd)'}">${yearDiff>=0?'+':''}${fmt(yearDiff)}</div>
-      </div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:6px">
-    ${avgs.filter(c=>c.avgIst>0).map(c=>{
-      const d=c.avgIst-c.avgPlan;
-      const pct=c.avgPlan>0?(c.avgIst/c.avgPlan*100):0;
-      const color=pct<=100?'var(--gr)':pct<=115?'var(--am)':'var(--rd)';
-      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--bg3);border-radius:8px">
-        <div style="flex:1;font-size:11.5px;color:var(--tx)">${escapeHTML(c.label)}</div>
-        <div style="font-family:var(--fm);font-size:11px;color:var(--tx2)">${fmtN(c.avgIst)}<span style="color:var(--tx3);font-size:9.5px">/Mt</span></div>
-        <div style="font-family:var(--fm);font-size:11px;color:${color};font-weight:500;min-width:55px;text-align:right">${d>=0?'+':''}${fmt(d)}</div>
-      </div>`;
-    }).join('')}
-    </div>
-    ${Math.abs(yearDiff)>500?`<div style="margin-top:10px;padding:10px 13px;background:${yearDiff>0?'var(--rdbg)':'rgba(74,222,128,0.08)'};border-radius:9px;font-size:11px;line-height:1.55;color:var(--tx2)">
-      ${yearDiff>0
-        ? `⚠ Auf Jahresbasis liegst du ca. <strong style="color:var(--rd)">${fmtN(Math.abs(yearDiff))}</strong> über dem Plan. Das entspricht ${fmtN(Math.abs(yearDiff/12))}/Mt zu viel.`
-        : `✓ Auf Jahresbasis liegst du ca. <strong style="color:var(--gr)">${fmtN(Math.abs(yearDiff))}</strong> unter dem Plan. Gut gemacht!`}
-    </div>`:''}
-  </div>`;
-}
 
 // ══ BUDGET VERLAUF ══
-function renderBpVerlauf(){
-  const body=document.getElementById('budgetplan-body');
-  const months=Object.keys(actualBudget).filter(m=>Object.keys(actualBudget[m]).length>0).sort().slice(-12);
-  const cats=getBudgetCats();
 
-  if(months.length===0){
-    body.innerHTML=`<div class="empty" style="padding:40px 20px;text-align:center">
-      <div style="font-size:32px;margin-bottom:12px">📊</div>
-      <div style="font-size:14px;font-weight:500;color:var(--tx);margin-bottom:8px">Noch keine Ist-Daten</div>
-      <div style="font-size:11.5px;color:var(--tx2);line-height:1.6">Erfasse zuerst Ist-Ausgaben im Tab<br><strong>Ist & Abgleich</strong> für mindestens einen Monat.</div>
-      <button class="btn btn-g" style="margin-top:16px" onclick="setBpTab('ist')">→ Ist erfassen</button>
-    </div>`;
-    return;
-  }
-
-  let h=`<div style="font-size:11px;color:var(--tx3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:14px">
-    Ist-Ausgaben — letzte ${months.length} Monate
-  </div>`;
-
-  // Per-category trend
-  cats.filter(c=>months.some(m=>actualBudget[m]?.[c.id]>0)).forEach(cat=>{
-    const vals=months.map(m=>({m, ist:actualBudget[m]?.[c.id]||0, plan:cat.plan}));
-    const maxVal=Math.max(cat.plan, ...vals.map(v=>v.ist));
-    const avgIst=vals.filter(v=>v.ist>0).reduce((s,v)=>s+v.ist,0)/Math.max(1,vals.filter(v=>v.ist>0).length);
-    const trend=avgIst-cat.plan;
-
-    h+=`<div style="background:var(--bg3);border-radius:11px;padding:13px 14px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:12px;font-weight:500;color:var(--tx)">${escapeHTML(cat.label)}</div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:10px;color:var(--tx3);font-family:var(--fm)">Ø ${fmt(avgIst)}/Mt</span>
-          <span style="font-size:10px;font-family:var(--fm);color:${trend<=0?'var(--gr)':'var(--rd)'};font-weight:500">${trend>=0?'+':''}${fmt(trend)} vs. Plan</span>
-        </div>
-      </div>
-      <!-- Mini bar chart -->
-      <div style="display:flex;gap:3px;align-items:flex-end;height:44px;margin-bottom:6px">
-        ${vals.map(v=>{
-          const pct=maxVal>0?v.ist/maxVal*100:0;
-          const planPct=maxVal>0?v.plan/maxVal*100:0;
-          const color=v.ist>0?(v.ist<=v.plan?'var(--gr)':v.ist<=v.plan*1.15?'var(--am)':'var(--rd)'):'var(--bg)';
-          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative" title="${fmtM(v.m)}: ${fmt(v.ist)}">
-            <!-- Plan line indicator -->
-            <div style="position:absolute;bottom:${planPct}%;left:0;right:0;height:1px;background:var(--tx3);opacity:0.4"></div>
-            <div style="width:100%;background:${color};border-radius:2px 2px 0 0;height:${Math.max(2,pct)}%;transition:height 0.3s;min-height:${v.ist>0?'4px':'0'}"></div>
-          </div>`;
-        }).join('')}
-      </div>
-      <!-- Month labels -->
-      <div style="display:flex;gap:3px">
-        ${vals.map(v=>`<div style="flex:1;text-align:center;font-size:8px;color:var(--tx3);font-family:var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fmtM(v.m).replace(' ','<br>')}</div>`).join('')}
-      </div>
-    </div>`;
-  });
-
-
-  body.innerHTML=h;
-}
 
 // ══ FIRE-RECHNER ══
 
 
+// ══════════════════════════════════════════
+// FIRE RECHNER — v33 (komplett neu)
+// ══════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════
 //  FIRE KERN v40 — Swiss FIRE 2026
@@ -6925,10 +6781,15 @@ function calcAHVBeitragNichtErwerb(vermögen){
 // Wer früh aufhört hat tiefes Durchschnittseinkommen → CHF 24'000–28'000/J
 // 13. AHV-Rente ab 2026 eingerechnet (+1/12)
 function calcAHVRenteRealistisch(lohn, alterAustritt, anteilVollJahre){
-  // Beitragsjahre: ab 21 bis Austritt (frueher Austritt = weniger Jahre = tiefere Rente)
-  const vollJahre = anteilVollJahre || Math.min(44, Math.max(0, alterAustritt - 21));
-  // Einkommensabhaengige Vollrente (Skala-44-Naeherung, inkl. 13.), nach Beitragsjahren gekuerzt
-  return ahvRente(lohn, vollJahre);
+  // Vollständige Beitragsjahre: 44 für Max
+  const vollJahre = anteilVollJahre || Math.min(44, Math.max(0, alterAustritt - 22));
+  // Mit frühem Austritt: verbleibende Jahre nur Mindestbeiträge → niedrigeres Durchschnittseinkommen
+  const anteil = Math.min(1, vollJahre / 44);
+  // Maximalrente 2026 inkl. 13. AHV: CHF 2'520 × 13/12 = CHF 2'730/Mt
+  const maxMt = 2730; // inkl. 13. AHV
+  // Realistisch: 75–90% des Anteils (wegen tiefem Durchschnittseinkommen bei FIRE)
+  const realistischFaktor = alterAustritt < 50 ? 0.72 : alterAustritt < 55 ? 0.78 : 0.85;
+  return Math.round(maxMt * anteil * realistischFaktor);
 }
 
 function getPKForPerson(person){
@@ -7021,7 +6882,7 @@ function getFireDefaults(personFilter){
       entnahmeRate, inflation:2.0,
       zugangAlter3a:60, zugangAlterPK:pkAlter,
       ahvMonatPP:ahvMt, ahvJahrTotal:ahvMt*12,
-      ahvBeitragNE, vermoegenssteuerJahr:estimateVermoegenssteuerBS(freeAssets,false),
+      ahvBeitragNE,
       penName:isIch?n1():n2(),
       netto1:Math.round((hh.p1?.netto||0)/12), netto2:0,
       p1Pensum:isIch?Math.round(income?.p1?.pensum||80):Math.round(income?.p2?.pensum||80),
@@ -7059,10 +6920,8 @@ function getFireDefaults(personFilter){
   const s3aRendite=0.04;
   const lohnI=renteParams?.ich?.lohn||60000;
   const lohnP=renteParams?.partner?.lohn||60000;
-  const _ahvMtI=calcAHVRenteRealistisch(lohnI, ageIch);
-  const _ahvMtP=calcAHVRenteRealistisch(lohnP, agePartner);
-  const _plaf=ahvPlafonieren(_ahvMtI,_ahvMtP); // Ehepaar-Plafonierung 150%
-  const ahvMtI=_plaf.i, ahvMtP=_plaf.p;
+  const ahvMtI=calcAHVRenteRealistisch(lohnI, ageIch);
+  const ahvMtP=calcAHVRenteRealistisch(lohnP, agePartner);
   const ahvJahrTotal=(ahvMtI+ahvMtP)*12;
   const ahvBeitragNE=calcAHVBeitragNichtErwerb(freeAssets+s3aAssets)*2; // beide Personen
   const fireHorizont=Math.max(0,90-avgAge);
@@ -7092,7 +6951,7 @@ function getFireDefaults(personFilter){
     entnahmeRate, inflation:2.0,
     zugangAlter3a:60, zugangAlterPK:pkAlter,
     ahvMonatI:ahvMtI, ahvMonatP:ahvMtP, ahvMonatPP:Math.round((ahvMtI+ahvMtP)/2),
-    ahvJahrTotal, ahvBeitragNE, vermoegenssteuerJahr:estimateVermoegenssteuerBS(freeAssets,true),
+    ahvJahrTotal, ahvBeitragNE,
     penName:'Haushalt', p1name:n1(), p2name:n2(),
     netto1:Math.round((hh.p1?.netto||0)/12),
     netto2:Math.round((hh.p2?.netto||0)/12),
@@ -7118,10 +6977,9 @@ function calcFireTimeline(fp, overrideSparrate){
     const alter=fp.avgAge+y;
     const istRentner=alter>=fp.penAge;
     const basis=fp.ausgaben*Math.pow(1+infl/100,y);
-    // Vor Rentenalter: AHV-Beitrag als Nicht-Erwerbstaetiger dazuzaehlen
+    // Vor Rentenalter: AHV-Beitrag als Nicht-Erwerbstätiger dazuzählen
     const ahv=istRentner?0:ahvBeitragJahr/12;
-    const vst=(fp.vermoegenssteuerJahr||0)/12; // Vermoegenssteuer BS (laufend)
-    return basis+ahv+vst;
+    return basis+ahv;
   }
 
   // Wachstum PK & 3a bis Zugang MIT Beiträgen
@@ -7247,27 +7105,6 @@ function calcFireTimeline(fp, overrideSparrate){
     return Math.round(w);
   }
 
-  // Sequence-of-Returns: gleiche Logik, aber Crash direkt nach FIRE
-  function depotNachFireJahreSoR(y){
-    if(!wealthAtFire||y<=0) return Math.round(wealthAtFire||fp.freeAssets);
-    let w=wealthAtFire;
-    const shock=[-0.15,-0.10,-0.03];
-    for(let m=0;m<y*12;m++){
-      const yrOffset=Math.floor(m/12);
-      const ausgM=ausgabenInJahrMitAHV(yrOffset);
-      const alterM=fp.avgAge+(fireYrs||0)+yrOffset;
-      const hasPK=alterM>=fp.zugangAlterPK;
-      const hasAHV=alterM>=fp.penAge;
-      const pkDeckt=hasPK?pkRenteMt:0;
-      const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
-      const eff=Math.max(0,ausgM-pkDeckt-ahvDeckt);
-      const rM=yrOffset<shock.length?(Math.pow(1+shock[yrOffset],1/12)-1):rMonth;
-      w=w*(1+rM)-eff;
-      if(w<=0) return 0;
-    }
-    return Math.round(w);
-  }
-
   // Zeitstrahl Events
   const timeline=[];
   if(isPartialFire||partialYear){
@@ -7329,8 +7166,9 @@ function calcFireTimeline(fp, overrideSparrate){
 
   // Chart-Serien
   const chartYears=Math.min(50,Math.max(30,(fireYrs||30)+8));
-  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[],seriesDepotNachFire=[],seriesDepotSoR=[];
+  const seriesNominal=[],seriesReal=[],seriesOpt=[],seriesPess=[],seriesDepotNachFire=[];
   let wN=fp.freeAssets,wO=fp.freeAssets,wPe=fp.freeAssets;
+  let inFIRE=false, wNachFire=0;
   for(let y=0;y<=chartYears;y++){
     const sp=(y<(fireYrs||1000))?sparrate*12:0;
     seriesNominal.push(Math.round(wN));
@@ -7338,9 +7176,10 @@ function calcFireTimeline(fp, overrideSparrate){
     seriesOpt.push(Math.round(wO));
     seriesPess.push(Math.round(wPe));
     if(fireYrs!==null&&y>=fireYrs){
-      seriesDepotNachFire.push(depotNachFireJahre(y-fireYrs));   // konsistent mit Zeitstrahl/Cashflow
-      seriesDepotSoR.push(depotNachFireJahreSoR(y-fireYrs));     // Sequence-of-Returns (Crash-Start)
-    } else { seriesDepotNachFire.push(null); seriesDepotSoR.push(null); }
+      if(!inFIRE){wNachFire=Math.round(wealthAtFire||wN);inFIRE=true;}
+      seriesDepotNachFire.push(wNachFire);
+      wNachFire=Math.max(0,wNachFire*(1+rYear)-entnahmeAtFire*12);
+    } else seriesDepotNachFire.push(null);
     if(y<chartYears){
       wN=wN*(1+rYear)+sp;
       wO=wO*(1+rYear+0.02)+sp;
@@ -7356,7 +7195,7 @@ function calcFireTimeline(fp, overrideSparrate){
     const hasPK=ageAtCF>=fp.zugangAlterPK;
     const hasAHV=ageAtCF>=fp.penAge;
     const pkDeckt=hasPK?pkRenteMt:0;
-    const s3aDeckt=hasPK&&!hasAHV?(s3aAt60/Math.max(1,(90-fp.zugangAlter3a))/12):0; // 3a als Kapitalbezug (konsistent)
+    const s3aDeckt=hasPK&&!hasAHV?(s3aAt60*0.04/12):0;
     const ahvDeckt=hasAHV?fp.ahvJahrTotal/12:0;
     const ausgReal=fp.ausgaben*Math.pow(1+infl/100,y);
     const depotBedarf=Math.max(0,ausgReal-ahvDeckt-pkDeckt-s3aDeckt);
@@ -7378,7 +7217,7 @@ function calcFireTimeline(fp, overrideSparrate){
     isPartialFire,partialFireZahl,partialYear,partialYrs,
     pctReached,fixkostenMt:Math.round(fp.ausgaben*0.6),
     timeline,
-    chartYears,seriesNominal,seriesReal,seriesOpt,seriesPess,seriesDepotNachFire,seriesDepotSoR,
+    chartYears,seriesNominal,seriesReal,seriesOpt,seriesPess,seriesDepotNachFire,
     cashflowYears,now
   };
 }
@@ -7428,7 +7267,7 @@ function renderFireRechner(){
     isPartialFire, partialFireZahl, partialYear, partialYrs,
     pctReached, wealthAtFire, entnahmeAtFire,
     timeline, fixkostenMt,
-    chartYears, seriesNominal, seriesReal, seriesOpt, seriesPess, seriesDepotNachFire, seriesDepotSoR,
+    chartYears, seriesNominal, seriesReal, seriesOpt, seriesPess, seriesDepotNachFire,
     cashflowYears
   }=calc;
   const infl=fp.inflation||2;
@@ -7773,7 +7612,7 @@ function renderFireRechner(){
         🇨🇭 <strong>AHV als Nicht-Erwerbstätiger (2026):</strong> Beitrag vermögensabhängig — ~${fmtC(ahvBeitragJahr||calcAHVBeitragNichtErwerb(fp.freeAssets))}/J für dein aktuelles Vermögen (Min. CHF 530, Max. CHF 26'500). <strong>Barista FIRE</strong>: Partner bleibt mind. 20–40% tätig → AHV für beide gedeckt, kein eigener Beitrag nötig.
       </div>
       <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
-        🛡 <strong>Sequence-of-Returns Risiko:</strong> Ein Crash in den ersten 3–5 Jahren nach FIRE kann den Plan dauerhaft beschädigen. Die rot-gepunktete Linie „Sequenzrisiko" im Wachstums-Chart modelliert genau das (Crash −15%/−10%/−3% direkt nach FIRE). Empfehlung: Cash-Puffer von 2–3 Jahresausgaben (~${fmtC(fp.ausgaben*30)}) in Cash/Obligationen, damit du in Krisenzeiten nicht verkaufen musst.
+        🛡 <strong>Sequence-of-Returns Risiko:</strong> Ein Crash in den ersten 3–5 Jahren nach FIRE kann den Plan dauerhaft beschädigen. Empfehlung: Cash-Puffer von 2–3 Jahresausgaben (~${fmtC(fp.ausgaben*30)}) in Cash/Obligationen, damit du in Krisenzeiten nicht verkaufen musst.
       </div>
       <div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.18);border-radius:9px;padding:10px 13px;font-size:10.5px;color:var(--tx2);line-height:1.6">
         📋 <strong>Bezugsreihenfolge PK & 3a:</strong> Nie PK, 3a und Freizügigkeit im gleichen Steuerjahr beziehen — alles wird zusammengezählt, die Progression explodiert. Max. 3 PK-Tranchen über 3 Kalenderjahre (Art. 13a BVG). PK-Einkäufe 3 Jahre vor Bezug stoppen (Art. 79b BVG Sperrfrist).
@@ -7801,12 +7640,11 @@ function renderFireRechner(){
       charts['fire-growth']=new Chart(el1.getContext('2d'),{
         type:'line',
         data:{labels,datasets:[
-          {label:'Optimistisch (+2%)',data:seriesOpt,borderColor:'rgba(251,191,36,0.4)',backgroundColor:'rgba(251,191,36,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
-          {label:'Pessimistisch (−2.5%)',data:seriesPess,borderColor:'rgba(248,113,113,0.4)',backgroundColor:'rgba(248,113,113,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
+          {label:'Optimistisch',data:seriesOpt,borderColor:'rgba(251,191,36,0.4)',backgroundColor:'rgba(251,191,36,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
+          {label:'Pessimistisch',data:seriesPess,borderColor:'rgba(248,113,113,0.4)',backgroundColor:'rgba(248,113,113,0.05)',fill:true,tension:0.3,borderWidth:1,pointRadius:0},
           {label:'Real',data:seriesReal,borderColor:'#93c5fd',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[4,3]},
           {label:'Nominal',data:seriesNominal,borderColor:'#4ade80',fill:false,tension:0.3,borderWidth:2.5,pointRadius:0},
           {label:'Nach FIRE',data:seriesDepotNachFire,borderColor:'#f87171',fill:false,tension:0.3,borderWidth:2,pointRadius:0,borderDash:[4,2]},
-          {label:'Sequenzrisiko (Crash-Start)',data:seriesDepotSoR,borderColor:'rgba(248,113,113,0.7)',fill:false,tension:0.3,borderWidth:1.5,pointRadius:0,borderDash:[2,2]},
           ...(fireIdx>=0?[{label:'FIRE',data:Array(chartYears+1).fill(null).map((_,i)=>i===fireIdx?seriesNominal[fireIdx]:null),
             pointRadius:Array(chartYears+1).fill(0).map((_,i)=>i===fireIdx?8:0),
             pointBackgroundColor:'#a78bfa',showLine:false,
@@ -8043,72 +7881,7 @@ function renderBaristaFire(){
 
 
 
-function renderSzenarien(){
-  const body=document.getElementById('proj-body');
-  if(!body)return;
-  const fp=fireParams||getFireDefaults();
-  const fmtC=n=>fmtN(Math.round(n));
 
-  const calc=calcFireTimeline(fp);
-  const infl=fp._inflation||2;
-  const yrsN=calc.yrs||15;
-  const ausgJetzt=fp.ausgaben;
-
-  const rows=[5,10,15,20,25,30];
-
-  body.innerHTML=`
-  <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-    <button onclick="fireParams=null;renderSzenarien()" style="display:flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--bdr);border-radius:7px;padding:5px 10px;font-size:10.5px;color:var(--tx2);cursor:pointer;font-family:var(--fb)">↺ Zurücksetzen</button>
-  </div>
-
-  <div class="widget" style="margin-bottom:14px">
-    <div class="widget-hd"><div>
-      <div class="widget-title">📊 Inflations-Impact</div>
-      <div class="widget-title-sub">Was bedeutet Inflation für eure FIRE-Zahl?</div>
-    </div></div>
-    <div class="widget-body">
-      <div style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx2);margin-bottom:5px">
-          <span>Inflationsrate p.a.</span>
-          <strong id="sz-infl-out" style="font-family:var(--fm)">${infl}%</strong>
-        </div>
-        <input type="range" min="0.5" max="5" step="0.5" value="${infl}"
-          oninput="if(!fireParams)fireParams={...getFireDefaults()};fireParams._inflation=+this.value;document.getElementById('sz-infl-out').textContent=this.value+'%';renderSzenarien()">
-      </div>
-      <div style="overflow-x:auto;border-radius:9px;border:1px solid var(--bdr)">
-        <table style="border-collapse:collapse;width:100%;min-width:280px;font-size:11px">
-          <thead>
-            <tr style="background:var(--bg3)">
-              <th style="text-align:left;padding:8px 12px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);font-family:var(--fb)">In X Jahren</th>
-              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-family:var(--fb)">Ausgaben/Mt</th>
-              <th style="text-align:right;padding:8px 10px;color:var(--tx3);font-size:10px;font-weight:500;border-bottom:1px solid var(--bdr2);border-left:1px solid var(--bdr);font-family:var(--fb)">FIRE-Ziel</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style="background:var(--bg3)">
-              <td style="padding:8px 12px;color:var(--tx2);font-size:10.5px;border-bottom:1px solid var(--bdr)">Heute</td>
-              <td style="text-align:right;padding:8px 10px;font-family:var(--fm);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(ausgJetzt)}</td>
-              <td style="text-align:right;padding:8px 10px;font-family:var(--fm);border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(calc.fireZahlFreieAssets)}</td>
-            </tr>
-            ${rows.map((y,i)=>{
-              const real=ausgJetzt*Math.pow(1+infl/100,y);
-              const fireR=real*12/(fp.entnahmeRate/100);
-              const isFire=yrsN&&Math.abs(y-yrsN)<=2;
-              return `<tr style="background:${i%2===0?'var(--bg)':'var(--bg3)'}">
-                <td style="padding:8px 12px;color:var(--tx);font-size:10.5px;border-bottom:1px solid var(--bdr)">+${y} J.${isFire?` <span style="color:var(--bl);font-size:9px">≈ FIRE</span>`:''}</td>
-                <td style="text-align:right;padding:8px 10px;font-family:var(--fm);color:${isFire?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(real)}</td>
-                <td style="text-align:right;padding:8px 10px;font-family:var(--fm);color:${isFire?'var(--am)':'var(--tx)'};border-left:1px solid var(--bdr);border-bottom:1px solid var(--bdr)" class="blur-val">${fmtC(fireR)}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div style="font-size:10px;color:var(--tx3);margin-top:7px;font-family:var(--fm)">
-        Bei ${infl}% Inflation am FIRE-Datum (+${yrsN} J.) kostet der gleiche Lebensstandard ${fmtC(ausgJetzt*Math.pow(1+infl/100,yrsN))}/Mt.
-      </div>
-    </div>
-  </div>`;
-}
 
 
 
@@ -8258,13 +8031,15 @@ async function saveCategories(){
 
 // ══ EXPORT ══
 function exportCSV(type){const ms=aMs();if(!ms.length){toast('Keine Daten','warn');return}let csv='',fn='';if(type==='all'){csv=['Monat','Person',...allItemKeys().map(k=>allItems().find(i=>i.id===k)?.label||k),'Einkommen','Investiert'].join(';')+'\n';ms.forEach(m=>['ich','partner'].forEach(p=>{const e=db[m]?.[p]||{};csv+=[fmtM(m),p==='ich'?n1():n2(),...allItemKeys().map(k=>e[k]||0),e.einkommen||0,e.investiert||0].join(';')+'\n'}));fn='vermoegen-detail.csv'}else{csv=['Monat',n1(),n2(),'Cash','Anlagen','Gesamt','Monatl. +/−','Notiz'].join(';')+'\n';ms.forEach((m,i)=>{const e=mgd(m),t=calcT(e);const prev=i>0?calcT(mgd(ms[i-1])):null;const d=prev?t.gesamt-prev.gesamt:'';csv+=`${fmtM(m)};${personT(m,'ich').gesamt};${personT(m,'partner').gesamt};${t.cash};${t.anlagen};${t.gesamt};${d};${notes[m]||''}\n`});fn='vermoegen-monatlich.csv'}const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);cm('modal-export')}
-function exportJSON(){const data={exportDate:new Date().toISOString(),version:14,vaultId,...collectFullState()};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vermoegen-backup.json';a.click();URL.revokeObjectURL(url);cm('modal-export')}
+function exportJSON(){const data={exportDate:new Date().toISOString(),vaultId,db,cats:getCats(),goals,notes,settings,renteParams};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='vermoegen-backup.json';a.click();URL.revokeObjectURL(url);cm('modal-export')}
 
 async function exportEncrypted(){
   try{
     const data={
-      exportDate:new Date().toISOString(),version:14,vaultId,
-      ...collectFullState()
+      exportDate:new Date().toISOString(),version:13,vaultId,
+      db,cats:getCats(),goals,notes,settings,renteParams,
+      income,budget:getBudget(),budgetMode,projParams,
+      hiddenMonths:[...hiddenMonths],widgetState
     };
     const enc=await encData(cryptoKey,data);
     const pwSalt=localStorage.getItem('vt_salt')||'';
@@ -8340,6 +8115,7 @@ function flushPendingSaves(){
   if(window._incomeSaveTimer){clearTimeout(window._incomeSaveTimer);window._incomeSaveTimer=null;needsPush=true}
   if(window._projSaveTimer){clearTimeout(window._projSaveTimer);window._projSaveTimer=null;needsPush=true}
   if(window._budgetSaveTimer){clearTimeout(window._budgetSaveTimer);window._budgetSaveTimer=null;needsPush=true}
+  if(window._abSaveTimer){clearTimeout(window._abSaveTimer);window._abSaveTimer=null;needsPush=true}
   if(window._settingsSaveTimer){clearTimeout(window._settingsSaveTimer);window._settingsSaveTimer=null;needsPush=true}
   if(needsPush)pushAll();
 }
