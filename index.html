@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='43.0.0';
+const APP_VERSION='44.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1331,6 +1331,7 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
       <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
         <button id="bptab-plan" class="bptab active" onclick="setBpTab('plan')">Plan</button>
         <button id="bptab-ist" class="bptab" onclick="setBpTab('ist')">Ist &amp; Abgleich</button>
+        <button id="bptab-szen" class="bptab" onclick="setBpTab('szen')">Szenarien</button>
       </div>
       <div id="budgetplan-body"></div>
     </div>
@@ -1358,6 +1359,7 @@ let hiddenMonths=new Set(),widgetState={};
 let currentPerson='ich',periodFilter='12m',currentView='gesamt';
 let charts={},syncTimer=null,editingGoalId=null,editorDraft=null;
 let currentEntryMonth='';
+let budgetScenarios=[]; // Phase 2: [{id,name,changes}]
 let gainPeriod='month'; // 'month'|'6m'|'12m'|'ytd' — Vergleichszeitraum im Konten-Tab
 // Positions: { 'YYYY-MM': { 'ich': [{id,name,ticker,value,assetClass,sector,region,currency,accountId}], 'partner': [...] } }
 let positions={};
@@ -1662,13 +1664,13 @@ const MAX_UNDO=5;
 
 function snapshotState(){
   // Capture current state for undo
-  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes}));
+  return JSON.parse(JSON.stringify({db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes,budgetScenarios}));
 }
 
 async function pushAll(){
   ss('busy','Speichert…');
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes,budgetScenarios};
     undoStack.push(JSON.parse(JSON.stringify(full)));
     if(undoStack.length>MAX_UNDO+1)undoStack.shift();
     const payload=await encData(cryptoKey,full);
@@ -1705,11 +1707,12 @@ async function undoLast(){
   if(prev.positions)positions=JSON.parse(JSON.stringify(prev.positions));
   if(prev.targetAllocation)targetAllocation=JSON.parse(JSON.stringify(prev.targetAllocation));
   if(prev.projParams)projParams=JSON.parse(JSON.stringify(prev.projParams));
+  budgetScenarios=prev.budgetScenarios?JSON.parse(JSON.stringify(prev.budgetScenarios)):[];
   // Push the reverted state
   // Skip the snapshot push for the undo itself
   const skipSnapshot=true;
   try{
-    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes};
+    const full={db,cats:getCats(),goals,notes,settings,hiddenMonths:[...hiddenMonths],widgetState,renteParams,budget,income,budgetMode,positions,targetAllocation,projParams,actualBudget,actualBudgetNotes,budgetScenarios};
     const payload=await encData(cryptoKey,full);
     const rec=await jbRead(binId);
     await jbWrite(binId,{...rec,payload});
@@ -1805,6 +1808,7 @@ function applyFull(full){
   projParams=full.projParams||{rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
   actualBudget=full.actualBudget||{};
   actualBudgetNotes=full.actualBudgetNotes||{};
+  budgetScenarios=Array.isArray(full.budgetScenarios)?full.budgetScenarios:[];
   // Reset undo stack on vault switch
   undoStack=[];
 }
@@ -2950,7 +2954,7 @@ async function resetSetup(){
   income=defaultIncome();
   budgetMode='gemeinsam';
   projParams={rate:7,inflation:2,years:20,extraSavings:0,divYield:3,phase2start:10,phase2savings:0,ter:0.2,wht:15};
-  actualBudget={};
+  actualBudget={};budgetScenarios=[];
   renteParams={
     ich:{gebJahr:1990,rentenalter:65,lohn:120000,arbJahre:40,pk:150000,pkBeitrag:25000,pkRendite:3,s3:0},
     partner:{gebJahr:1990,rentenalter:64,lohn:80000,arbJahre:38,pk:80000,pkBeitrag:18000,pkRendite:3,s3:0}
@@ -5705,13 +5709,14 @@ function updIncome(field, val, p){
 
 function setBpTab(tab){
   bpTab=tab;
-  document.querySelectorAll('.bptab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#bptab-plan,#bptab-ist,#bptab-szen').forEach(b=>b.classList.remove('active'));
   document.getElementById('bptab-'+tab)?.classList.add('active');
   renderBudgetplan();
 }
 
 function renderBudgetplan(){
   if(bpTab==='ist'){renderBpIst();return}
+  if(bpTab==='szen'){renderBpSzen();return}
   renderBpPlan();
 }
 
@@ -6434,6 +6439,197 @@ function buildKitaPensumRecommendation(hh, bt, kitaInBudgetAmt){
     <div style="font-size:9.5px;color:var(--tx3);margin-top:7px;font-family:var(--fm)">♥ = Familien-Tage/Woche · Blau = aktuelle Wahl · Werte in CHF/Mt (gerundet)</div>
   </div>`;
 }
+
+// ══ BUDGET-SZENARIEN & HEBEL-ANALYSE (v44) ══
+// ANNAHMEN (Stand 2025/26, vereinfachte Richtwerte, keine Beratung)
+const SZEN={
+  hypAnteil:0.8,          // Belehnung 80% (20% Eigenmittel)
+  zinsKalk:0.05,          // kalkulatorischer Zins Tragbarkeit
+  unterhalt:0.01,         // Nebenkosten/Unterhalt p.a. vom Kaufpreis
+  amortZielAnteil:2/3,    // Amortisation auf 2/3 Belehnung ...
+  amortJahre:15,          // ... innerhalb 15 Jahren
+  tragbarMaxPct:33,       // max. Wohnkosten in % vom Brutto
+  zinsEffDefault:2.0,     // effektiver Hypo-Zins fürs Budget (Annahme, anpassbar)
+  oevPauschale:150,       // ÖV/Mobility-Pauschale pro Monat ohne Auto (Annahme)
+  wohnenOkPct:25, wohnenMaxPct:33, fixMaxPct:50, sparZielPct:15, sparMinPct:10,
+  hebelPct:10, wohnenZielPct:30
+};
+function withIncome(ch,fn){
+  const saved=income,c=JSON.parse(JSON.stringify(income));
+  if(ch.p1Pensum!=null)c.p1.pensum=ch.p1Pensum;
+  if(ch.p2Pensum!=null)c.p2.pensum=ch.p2Pensum;
+  if(ch.kinder!=null)c.kinder=ch.kinder;
+  if(ch.kitaTage!=null)c.kitaTage=ch.kitaTage;
+  income=c;
+  try{return fn()}finally{income=saved}
+}
+function kaufKosten(k,brutto){
+  const preis=k.preis||0,hyp=preis*SZEN.hypAnteil;
+  const amort=Math.max(0,hyp-preis*SZEN.amortZielAnteil)/SZEN.amortJahre;
+  const kalkJahr=hyp*SZEN.zinsKalk+preis*SZEN.unterhalt+amort;
+  const zinsEff=(k.zinsEff!=null?k.zinsEff:SZEN.zinsEffDefault)/100;
+  const effJahr=hyp*zinsEff+preis*SZEN.unterhalt+amort;
+  const kalkPct=brutto>0?kalkJahr/brutto*100:0;
+  return{monatEff:effJahr/12,kalkJahr,kalkPct,tragbar:brutto>0&&kalkPct<=SZEN.tragbarMaxPct,eigenmittel:preis*(1-SZEN.hypAnteil),amortJahr:amort};
+}
+// Reine Berechnung: veraendert den globalen State nicht (income wird nur temporaer getauscht)
+function calcScenario(ch){
+  ch=ch||{};
+  return withIncome(ch,()=>{
+    const hh=calcHousehold(),kita=calcKitaKosten();
+    const ki=getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita');
+    const kitaInBudget=!!ki&&budgetItemAmt(ki)>0;
+    const kitaChanged=ch.kinder!=null||ch.kitaTage!=null;
+    let fix=0,vari=0,wohnen=0,kauf=null;const rows=[];
+    getBudget().forEach(cat=>cat.items.forEach(it=>{
+      let amt=budgetItemAmt(it);
+      if(it.id==='miete'){
+        if(ch.kauf&&ch.kauf.on&&ch.kauf.preis>0){kauf=kaufKosten(ch.kauf,hh.bruttoJahrTotal);amt=kauf.monatEff}
+        else amt+=ch.mieteDelta||0;
+      }
+      if(it.id==='auto'){if(ch.auto==='off')amt=0;else if(ch.auto==='custom')amt=ch.autoCustom||0}
+      if(it.id==='kita'&&kitaInBudget&&kitaChanged)amt=kita.monat;
+      const cp=ch.catPct&&ch.catPct[cat.id];
+      if(cp&&it.type==='var')amt*=1+cp/100;
+      const ip=ch.itemPct&&ch.itemPct[it.id];
+      if(ip!=null)amt*=1+ip/100;
+      amt=Math.max(0,amt);
+      if(it.id==='miete'||it.id==='nebenkosten')wohnen+=amt;
+      if(it.type==='fix')fix+=amt;else vari+=amt;
+      rows.push({catId:cat.id,id:it.id,amt});
+    }));
+    vari+=(kitaInBudget?0:kita.monat)+(ch.auto==='off'?(ch.oev!=null?ch.oev:SZEN.oevPauschale):0)+(ch.einmalig||0)/12;
+    const netto=hh.nettoMonat,ausgaben=fix+vari,ueb=netto-ausgaben;
+    const r={rows,netto,brutto:hh.bruttoJahrTotal,ausgaben,fix,vari,ueberschuss:ueb,ueberschussJahr:ueb*12,
+      sparquote:netto>0?ueb/netto*100:0,wohnen,wohnenPct:netto>0?wohnen/netto*100:0,fixPct:netto>0?fix/netto*100:0,kauf,warnings:[]};
+    if(r.wohnenPct>SZEN.wohnenMaxPct)r.warnings.push(`Wohnen ${r.wohnenPct.toFixed(0)}% vom Netto (Richtwert max. ${SZEN.wohnenMaxPct}%)`);
+    if(ueb<0)r.warnings.push('Defizit: Ausgaben übersteigen das Netto');
+    else if(r.sparquote<SZEN.sparMinPct)r.warnings.push(`Sparquote unter ${SZEN.sparMinPct}%`);
+    if(kauf&&!kauf.tragbar)r.warnings.push(`Nicht tragbar: kalk. Kosten ${kauf.kalkPct.toFixed(0)}% vom Brutto (max. ${SZEN.tragbarMaxPct}%)`);
+    return r;
+  });
+}
+// Vermoegen aus monatlichem Sparbetrag, Rendite/TER/WHT aus projParams
+function szenFutureWealth(sparMt,years){
+  const p=projParams,dv=(p.divYield||0)/100,cg=Math.max(0,(p.rate||0)/100-dv);
+  const r=(cg+dv*(1-(p.wht||0)/100))-(p.ter||0)/100;let w=0;
+  for(let y=0;y<years;y++)w=w*(1+r)+sparMt*12;
+  return w;
+}
+function szFind(id){return budgetScenarios.find(x=>x.id===id)}
+async function szSave(){await pushAll();renderBpSzen()}
+function szNew(){budgetScenarios.push({id:'sz_'+rndH(3),name:'Szenario '+(budgetScenarios.length+1),changes:{}});szSave()}
+function szDup(id){const x=szFind(id);if(!x)return;budgetScenarios.push({id:'sz_'+rndH(3),name:x.name+' (Kopie)',changes:JSON.parse(JSON.stringify(x.changes))});szSave()}
+async function szDel(id){const x=szFind(id);if(!x)return;if(!await confirmX(`Szenario «${escapeHTML(x.name)}» löschen?`,{title:'Szenario löschen',destructive:true,okLabel:'Löschen'}))return;budgetScenarios=budgetScenarios.filter(y=>y.id!==id);szSave()}
+function szSet(id,key,val){
+  const x=szFind(id);if(!x)return;
+  if(key==='name'){x.name=String(val).trim()||x.name}
+  else if(val===null||val===''||(typeof val==='number'&&isNaN(val)))delete x.changes[key];
+  else x.changes[key]=val;
+  szSave();
+}
+function szSetKauf(id,key,val){const x=szFind(id);if(!x)return;const k=x.changes.kauf||(x.changes.kauf={on:false,preis:0});k[key]=val;szSave()}
+function szSetAuto(id,mode){const x=szFind(id);if(!x)return;if(mode==='keep'){delete x.changes.auto}else x.changes.auto=mode;szSave()}
+function szAddAdj(id){
+  const x=szFind(id);if(!x)return;
+  const v=document.getElementById('szadj-sel-'+id).value,pct=parseFloat(document.getElementById('szadj-pct-'+id).value);
+  if(!v||!pct||isNaN(pct)){toast('Position und Prozentwert wählen','warn');return}
+  const k=v[0]==='c'?'catPct':'itemPct';x.changes[k]=x.changes[k]||{};x.changes[k][v.slice(2)]=Math.max(-100,pct);szSave();
+}
+function szDelAdj(id,kind,key){const x=szFind(id);if(!x)return;const k=kind==='c'?'catPct':'itemPct';if(x.changes[k]){delete x.changes[k][key];if(!Object.keys(x.changes[k]).length)delete x.changes[k]}szSave()}
+async function szApplyBase(id){
+  const x=szFind(id);if(!x)return;
+  if(!await confirmX(`Szenario «${escapeHTML(x.name)}» als neues Basisbudget übernehmen?<br><br>Überschrieben werden Budget-Beträge, Pensum, Kinder und Kita-Tage. Einmalige Kosten und ÖV-Pauschale werden nicht übernommen.`,{title:'Als Basis übernehmen',destructive:true,okLabel:'Übernehmen'}))return;
+  const ch=x.changes,r=calcScenario(ch);
+  if(ch.p1Pensum!=null)income.p1.pensum=ch.p1Pensum;
+  if(ch.p2Pensum!=null)income.p2.pensum=ch.p2Pensum;
+  if(ch.kinder!=null)income.kinder=ch.kinder;
+  if(ch.kitaTage!=null)income.kitaTage=ch.kitaTage;
+  r.rows.forEach(row=>{const it=getBudget().find(c=>c.id===row.catId)?.items.find(i=>i.id===row.id);if(it)it.amt=Math.round(row.amt)});
+  await pushAll();renderBpSzen();toast('Als Basis übernommen','ok');
+}
+function szenLevers(base){
+  const L=[];
+  const add=(label,ch)=>{const r=calcScenario(ch),sav=(r.ueberschuss-base.ueberschuss)*12;if(sav>50)L.push({label,ch,sav,r})};
+  if(base.netto>0&&base.wohnenPct>SZEN.wohnenZielPct)add(`Wohnkosten auf ${SZEN.wohnenZielPct}% vom Netto senken`,{mieteDelta:-Math.round(base.wohnen-base.netto*SZEN.wohnenZielPct/100)});
+  getBudget().forEach(cat=>{if(cat.items.some(i=>i.type==='var'&&budgetItemAmt(i)>0))add(`Variable Kosten «${cat.label}» −${SZEN.hebelPct}%`,{catPct:{[cat.id]:-SZEN.hebelPct}})});
+  return L.sort((a,b)=>b.sav-a.sav).slice(0,5);
+}
+function szFromLever(i){const l=(window._szLevers||[])[i];if(!l)return;budgetScenarios.push({id:'sz_'+rndH(3),name:l.label,changes:JSON.parse(JSON.stringify(l.ch))});szSave();toast('Szenario angelegt','ok')}
+function szenIstHints(){
+  const ms=Object.keys(actualBudget).filter(m=>Object.values(actualBudget[m]||{}).some(v=>v>0));
+  if(!ms.length)return null;const out=[];
+  getBudgetCats().forEach(c=>{const v=ms.map(m=>actualBudget[m]?.[c.id]).filter(x=>x>0);if(!v.length)return;const avg=v.reduce((a,b)=>a+b,0)/v.length;if(avg-c.plan>25)out.push({label:c.label,avg,plan:c.plan,d:avg-c.plan})});
+  return{n:ms.length,items:out.sort((a,b)=>b.d-a.d).slice(0,3)};
+}
+function szenCard(name,r,base,isBase){
+  const dF=v=>(v>=0?'+':'−')+fmt(Math.abs(v)),dP=v=>(v>=0?'+':'−')+Math.abs(v).toFixed(1)+' pp';
+  const defs=[['Netto / Mt',x=>x.netto,fmt,dF,1],['Ausgaben / Mt',x=>x.ausgaben,fmt,dF,-1],['Überschuss / Mt',x=>x.ueberschuss,fmt,dF,1],
+    ['Sparquote',x=>x.sparquote,v=>v.toFixed(1)+'%',dP,1],['Wohnen / Netto',x=>x.wohnenPct,v=>v.toFixed(1)+'%',dP,-1],['Fixkostenquote',x=>x.fixPct,v=>v.toFixed(1)+'%',dP,-1],
+    ['Überschuss / Jahr',x=>x.ueberschussJahr,fmt,dF,1],['Gespart nach 10 J.',x=>szenFutureWealth(x.ueberschuss,10),fmt,dF,1],['Gespart nach 20 J.',x=>szenFutureWealth(x.ueberschuss,20),fmt,dF,1]];
+  let h=`<div style="background:var(--bg3);border-radius:11px;padding:13px 14px;${isBase?'border:1px solid var(--gbdr)':''}"><div style="font-size:12.5px;font-weight:500;margin-bottom:8px">${escapeHTML(name)}${isBase?' <span style="font-size:9.5px;color:var(--gr);font-family:var(--fm)">BASIS</span>':''}</div>`;
+  defs.forEach(([l,f,fm,fd,dir])=>{
+    const v=f(r),d=isBase?0:v-f(base),show=!isBase&&Math.abs(d)>0.05;
+    h+=`<div style="display:flex;justify-content:space-between;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--bdr);font-size:11px"><span style="color:var(--tx2)">${l}</span><span class="blur-val" style="font-family:var(--fm);font-weight:500">${fm(v)}${show?` <span style="font-size:9.5px;color:${d*dir>0?'var(--gr)':'var(--rd)'}">${fd(d)}</span>`:''}</span></div>`;
+  });
+  if(!isBase){
+    const dU=r.ueberschuss-base.ueberschuss,d20=szenFutureWealth(r.ueberschuss,20)-szenFutureWealth(base.ueberschuss,20);
+    h+=Math.abs(dU)<1?`<div style="font-size:10.5px;color:var(--tx2);margin-top:8px">Kein Unterschied beim Überschuss.</div>`
+      :`<div style="font-size:10.5px;color:var(--tx2);margin-top:8px;line-height:1.55"><span class="blur-val">${dU>0?'Mehr':'Weniger'} Überschuss: ${fmt(Math.abs(dU))}/Mt (${fmt(Math.abs(dU*12))}/J)</span>. Sparquote ${r.sparquote.toFixed(1)}% statt ${base.sparquote.toFixed(1)}%. Nach 20 J. <span class="blur-val">${fmt(Math.abs(d20))}</span> ${dU>0?'mehr':'weniger'} gespart <span style="color:var(--tx3)">(Annahme: ${projParams.rate}% Rendite, ${projParams.ter}% TER)</span>.</div>`;
+  }
+  if(r.kauf)h+=`<div style="font-size:10px;color:var(--tx3);margin-top:6px;font-family:var(--fm)" class="blur-val">Kauf: Eigenmittel ${fmt(r.kauf.eigenmittel)} · kalk. Kosten ${fmt(r.kauf.kalkJahr)}/J = ${r.kauf.kalkPct.toFixed(0)}% vom Brutto → ${r.kauf.tragbar?'tragbar':'nicht tragbar'}</div>`;
+  r.warnings.forEach(w=>{h+=`<div style="font-size:10.5px;color:var(--am);margin-top:5px">⚠ ${escapeHTML(w)}</div>`});
+  return h+`</div>`;
+}
+function szenEditor(x,base){
+  const ch=x.changes,id=x.id,k=ch.kauf||{on:false,preis:0};
+  const fld=(l,hint,ctrl)=>`<div class="bp-field"><div><div class="bp-field-lbl">${l}</div><div class="bp-field-hint">${hint}</div></div><div class="bp-field-ctrl">${ctrl}</div></div>`;
+  const num=(key,val,ph,step,w)=>`<input type="number" class="bp-num small blur-val" style="width:${w||90}px" value="${val==null?'':val}" placeholder="${ph}" step="${step}" onchange="szSet('${id}','${key}',this.value===''?null:+this.value)">`;
+  const seg=(cur,opts,fn)=>`<div class="bp-segment">${opts.map(([v,l])=>`<button class="bp-seg-btn ${cur===v?'active':''}" onclick="${fn(v)}">${l}</button>`).join('')}</div>`;
+  const md=ch.mieteDelta||0,auto=ch.auto||'keep';
+  const catLbl=c=>escapeHTML(getBudget().find(x=>x.id===c)?.label||c);
+  const itLbl=i=>{for(const c of getBudget()){const it=c.items.find(y=>y.id===i);if(it)return escapeHTML(c.label+' › '+it.label)}return escapeHTML(i)};
+  const adjs=[...Object.entries(ch.catPct||{}).map(([c,p])=>['c',c,p,catLbl(c)+' (variable)']),...Object.entries(ch.itemPct||{}).map(([i,p])=>['i',i,p,itLbl(i)])];
+  let h=`<div class="bp-section"><div class="bp-section-hd"><div style="flex:1;min-width:160px"><input class="inp" style="font-family:var(--fb);font-weight:500" value="${escapeHTML(x.name)}" onchange="szSet('${id}','name',this.value)"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-gh btn-sm" onclick="szDup('${id}')">Duplizieren</button><button class="btn btn-gh btn-sm" onclick="szApplyBase('${id}')">Als Basis</button><button class="btn btn-rd btn-sm" onclick="szDel('${id}')">Löschen</button></div></div>`;
+  h+=fld('Wohnen','Miete ändern oder Kauf statt Miete',`<div class="bp-segment"><button class="bp-seg-btn ${!k.on?'active':''}" onclick="szSetKauf('${id}','on',false)">Miete</button><button class="bp-seg-btn ${k.on?'active':''}" onclick="szSetKauf('${id}','on',true)">Kauf</button></div>`);
+  if(k.on){
+    h+=fld('Kaufpreis','Eigenmittel 20%, Belehnung 80%',num2(id,'preis',k.preis,'0',10000,120)+'<span class="bp-num-suffix">CHF</span>');
+    h+=fld('Hypo-Zins effektiv','Fürs Budget (Tragbarkeit rechnet mit 5%)',`<input type="number" class="bp-num small" value="${k.zinsEff!=null?k.zinsEff:SZEN.zinsEffDefault}" step="0.25" onchange="szSetKauf('${id}','zinsEff',+this.value)"><span class="bp-num-suffix">%</span>`);
+  }else{
+    h+=fld('Miete +/−','Aktuell im Budget: '+fmt(Math.round(base.wohnen))+'/Mt',`<input type="range" min="-1500" max="3000" step="50" value="${md}" style="width:120px" oninput="this.nextElementSibling.value=this.value" onchange="szSet('${id}','mieteDelta',+this.value)">${num('mieteDelta',md,'0',50,80)}<span class="bp-num-suffix">CHF</span>`);
+  }
+  h+=fld('Auto','Kosten aus Budget-Position «Auto»',seg(auto,[['keep','Behalten'],['off','Kein Auto'],['custom','Anderer Betrag']],v=>`szSetAuto('${id}','${v}')`));
+  if(auto==='off')h+=fld('ÖV/Mobility-Pauschale','Ersatz pro Monat',num('oev',ch.oev,SZEN.oevPauschale,10,80)+'<span class="bp-num-suffix">CHF</span>');
+  if(auto==='custom')h+=fld('Auto pro Monat','Ersetzt den Budgetwert',num('autoCustom',ch.autoCustom,'0',50,80)+'<span class="bp-num-suffix">CHF</span>');
+  h+=fld(n1()+' Pensum','Leer = Basis ('+income.p1.pensum+'%)',num('p1Pensum',ch.p1Pensum,income.p1.pensum,10,70)+'<span class="bp-num-suffix">%</span>');
+  h+=fld(n2()+' Pensum','Leer = Basis ('+income.p2.pensum+'%)',num('p2Pensum',ch.p2Pensum,income.p2.pensum,10,70)+'<span class="bp-num-suffix">%</span>');
+  h+=fld('Kinder','Leer = Basis ('+income.kinder+')',num('kinder',ch.kinder,income.kinder,1,70));
+  h+=fld('Kita-Tage / Woche & Kind','Leer = Basis ('+income.kitaTage+')',num('kitaTage',ch.kitaTage,income.kitaTage,1,70));
+  h+=fld('Einmalige Kosten','z.B. Umzug, auf 12 Monate verteilt',num('einmalig',ch.einmalig,'0',500,100)+'<span class="bp-num-suffix">CHF</span>');
+  h+=`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--bdr)"><div class="bp-field-lbl" style="margin-bottom:6px">Position anpassen (%)</div>`;
+  adjs.forEach(([kind,key,p,label])=>{h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:11.5px"><span>${label}</span><span><span style="font-family:var(--fm);color:${p<=0?'var(--gr)':'var(--rd)'}">${p>0?'+':''}${p}%</span> <button class="budget-del" onclick="szDelAdj('${id}','${kind}','${key}')">✕</button></span></div>`});
+  h+=`<div style="display:flex;gap:6px;margin-top:6px"><select id="szadj-sel-${id}" style="flex:1;min-width:0">${getBudget().map(c=>`<option value="c:${c.id}">${escapeHTML(c.label)} (alle variablen)</option>`+c.items.map(i=>`<option value="i:${i.id}">${escapeHTML(c.label+' › '+i.label)}</option>`).join('')).join('')}</select><input id="szadj-pct-${id}" type="number" class="inp inp-num" style="width:70px" placeholder="−20" step="5"><button class="btn btn-gh btn-sm" onclick="szAddAdj('${id}')">+</button></div><div style="font-size:9.5px;color:var(--tx3);margin-top:4px">−100% = Position entfällt. Kategorie-Anpassung wirkt nur auf variable Positionen.</div></div>`;
+  return h+`</div>`;
+}
+function renderBpSzen(){
+  const body=document.getElementById('budgetplan-body');if(!body)return;
+  const base=calcScenario({});
+  let h=`<div class="bp-section"><div class="bp-section-hd"><div><div class="bp-section-title">Szenarien</div><div class="bp-section-sub">Was-wäre-wenn auf dem Basisbudget. Das Basisbudget bleibt unverändert.</div></div><button class="btn btn-g btn-sm" onclick="szNew()">+ Szenario</button></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px">${szenCard('Basis (Plan)',base,base,true)}${budgetScenarios.map(x=>szenCard(x.name,calcScenario(x.changes),base,false)).join('')}</div>
+    ${budgetScenarios.length?'':'<div style="font-size:11px;color:var(--tx3);margin-top:10px">Noch kein Szenario. Lege eines an oder speichere unten einen Hebel als Szenario.</div>'}</div>`;
+  h+=budgetScenarios.map(x=>szenEditor(x,base)).join('');
+  const levers=szenLevers(base);window._szLevers=levers;const ist=szenIstHints();
+  h+=`<div class="bp-section"><div class="bp-section-hd"><div><div class="bp-section-title">Hebel-Analyse</div><div class="bp-section-sub">Orientierung anhand von Richtwerten, kein «optimales» Budget</div></div></div>
+    <div class="bp-bench-grid" style="margin-top:0">${benchmarkCard('Wohnen / Netto',base.wohnenPct,SZEN.wohnenOkPct,SZEN.wohnenMaxPct,'Richtwert 25–33% vom Netto')}${benchmarkCard('Fixkosten / Netto',base.fixPct,SZEN.fixMaxPct,60,'Richtwert unter 50%')}${benchmarkCard('Sparquote',base.sparquote,SZEN.sparZielPct,SZEN.sparMinPct,'Richtwert 15%+',true)}</div>`;
+  if(base.netto>0&&base.sparquote<SZEN.sparZielPct)h+=`<div style="font-size:11px;color:var(--tx2);margin-top:12px" class="blur-val">Für ${SZEN.sparZielPct}% Sparquote fehlen ca. ${fmt(Math.round(base.netto*SZEN.sparZielPct/100-base.ueberschuss))} pro Monat.</div>`;
+  h+=`<div style="margin-top:14px">${levers.length?levers.map((l,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg3);border-radius:9px;margin-bottom:6px;flex-wrap:wrap"><div style="flex:1;min-width:180px"><div style="font-size:12px;font-weight:500">${escapeHTML(l.label)}</div><div class="blur-val" style="font-size:10.5px;color:var(--tx2);margin-top:2px">+${fmt(Math.round(l.sav))}/Jahr · Sparquote ${l.r.sparquote.toFixed(1)}% · nach 20 J. +${fmt(Math.round(szenFutureWealth(l.sav/12,20)))}</div></div><button class="btn btn-gh btn-sm" onclick="szFromLever(${i})">Als Szenario</button></div>`).join(''):'<div style="font-size:11px;color:var(--tx3)">Keine grossen Hebel erkannt. Erfasse Beträge im Budget, um Hebel zu sehen.</div>'}</div>`;
+  if(ist&&ist.items.length)h+=`<div style="margin-top:12px;font-size:11px;color:var(--tx2);line-height:1.6"><strong>Ist vs. Plan</strong> (Ø ${ist.n} Monate): ${ist.items.map(i=>`${escapeHTML(i.label)} <span class="blur-val" style="color:var(--rd)">+${fmt(Math.round(i.d))}/Mt</span>`).join(' · ')}. Entweder Plan anpassen oder einsparen.</div>`;
+  h+=`<div style="font-size:9.5px;color:var(--tx3);margin-top:12px;line-height:1.6">Annahmen: Hebel = variable Kosten −${SZEN.hebelPct}% je Kategorie bzw. Wohnen auf ${SZEN.wohnenZielPct}% vom Netto. Kauf: ${SZEN.hypAnteil*100}% Belehnung, ${SZEN.zinsKalk*100}% kalk. Zins, ${SZEN.unterhalt*100}% Unterhalt, Amortisation auf 2/3 in ${SZEN.amortJahre} J., max. ${SZEN.tragbarMaxPct}% vom Brutto. Vermögen: Rendite, TER und Quellensteuer aus der Projektion. Steuern auf Szenario-Löhne sind geschätzt.</div></div>`;
+  body.innerHTML=h;
+  const sub=document.getElementById('bp-sub');if(sub)sub.textContent=`${budgetScenarios.length} Szenario${budgetScenarios.length===1?'':'en'} · Basis ${base.ueberschuss>=0?'+':''}${fmt(base.ueberschuss)}/Mt`;
+}
+function num2(id,key,val,ph,step,w){return `<input type="number" class="bp-num small blur-val" style="width:${w}px" value="${val||''}" placeholder="${ph}" step="${step}" onchange="szSetKauf('${id}','${key}',+this.value||0)">`}
 
 // ══ BUDGET IST & ABGLEICH ══
 let bpIstYear=new Date().getFullYear();
@@ -8038,7 +8234,7 @@ async function exportEncrypted(){
     const data={
       exportDate:new Date().toISOString(),version:13,vaultId,
       db,cats:getCats(),goals,notes,settings,renteParams,
-      income,budget:getBudget(),budgetMode,projParams,
+      income,budget:getBudget(),budgetMode,projParams,budgetScenarios,
       hiddenMonths:[...hiddenMonths],widgetState
     };
     const enc=await encData(cryptoKey,data);
