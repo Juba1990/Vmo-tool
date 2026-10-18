@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='45.0.0';
+const APP_VERSION='46.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -879,6 +879,10 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
   .an-two{grid-template-columns:1fr}
 }
 
+.gc-split{margin-top:8px;padding-top:7px;border-top:1px solid var(--bdr);display:grid;gap:3px}
+.gc-split>div{display:flex;justify-content:space-between;gap:8px;font-size:10px;font-family:var(--fm);color:var(--tx2)}
+.gc-split>div>span:first-child{font-family:var(--fb);color:var(--tx3)}
+.gc-split-note{display:block!important;font-size:9px!important;color:var(--am)!important;line-height:1.4;font-family:var(--fb)}
 </style>
 </head>
 <body>
@@ -4250,6 +4254,43 @@ function renderSummary(){
   }
 }
 
+// ══ ZUWACHS OHNE G/V ══
+// Trennt die Veränderung zwischen zwei Monaten in «Marktbewegung (G/V)» und «Zuwachs ohne G/V» (Einzahlungen, Cash-Veränderung etc.)
+function viewPersons(view){
+  if(view==='p1')return ['ich'];
+  if(view==='p2')return ['partner'];
+  return settings.kinderEnabled?['ich','partner','kinder']:['ich','partner'];
+}
+// scope: 'gesamt' (ohne PK) | 'anlagen' (freie Anlagen) | 's3a'
+function gvSplit(prevMonth,month,view,scope){
+  let market=0,covered=0,uncovered=0;
+  if(!prevMonth||!month)return {market,covered,uncovered};
+  const persons=viewPersons(view);
+  getTrackedAccounts().forEach(a=>{
+    const vt=itemVorsorge(a.catId,a.itemId);
+    if(vt==='pk')return;
+    if(scope==='anlagen'&&vt!=='free')return;
+    if(scope==='s3a'&&vt!=='s3a')return;
+    const k='gv_'+a.itemId;
+    persons.forEach(p=>{
+      const e1=db[month]?.[p]||{},e0=db[prevMonth]?.[p]||{};
+      if(!(e1[a.itemId]||0)&&!(e0[a.itemId]||0))return;
+      if(typeof e1[k]==='number'&&typeof e0[k]==='number'){market+=e1[k]-e0[k];covered++}
+      else uncovered++;
+    });
+  });
+  return {market,covered,uncovered};
+}
+function gvSplitHTML(prevMonth,month,view,scope,totalDelta){
+  if(!prevMonth||totalDelta==null)return '';
+  const sp=gvSplit(prevMonth,month,view,scope);
+  if(sp.covered===0)return '';
+  const ohne=totalDelta-sp.market;
+  const c=v=>v>=0?'var(--gr)':'var(--rd)';
+  const sg=v=>(v>=0?'+':'')+fmt(Math.round(v));
+  return `<div class="gc-split"><div><span>davon Markt (G/V)</span><span class="blur-val" style="color:${c(sp.market)}">${sg(sp.market)}</span></div><div><span><strong>Zuwachs ohne G/V</strong></span><span class="blur-val" style="color:${c(ohne)};font-weight:600">${sg(ohne)}</span></div>${sp.uncovered>0?`<div class="gc-split-note">${sp.uncovered} Konto/Konten ohne G/V-Angabe in einem der Monate: dort zählt die ganze Veränderung als Zuwachs.</div>`:''}</div>`;
+}
+
 // ══ DASHBOARD ══
 function popDashSel(){
   const sel=document.getElementById('dash-sel');const ms=validMonths(currentView);const cur=sel.value;
@@ -4278,8 +4319,8 @@ function renderGainCards(activePer,month,ms,mi,t){
   const cmp=getCompareMonth(activePer,month,ms,vw);
   const prev=cmp?getT(cmp.month,vw):null;
   const label=cmp?('vs. '+fmtM(cmp.month)+(cmp.truncated?' (ältester verfügbarer)':'')):'kein Vergleichsmonat';
-  const gc=(curr,pv,lbl)=>{if(pv==null)return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v mut">—</div></div>`;const d=curr-pv,p=pv?((d/pv)*100).toFixed(1):0;return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${fmt(d)}</div><div class="gc-s ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${p}%</div></div>`};
-  document.getElementById('gain-body').innerHTML=`<div class="gain-grid">${gc(t.gesamt,prev?.gesamt,'Gesamtvermögen')}${gc(t.cash,prev?.cash,'Cash')}${gc(t.anlagen,prev?.anlagen,'Anlagen')}</div>`;
+  const gc=(curr,pv,lbl,scope)=>{if(pv==null)return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v mut">—</div></div>`;const d=curr-pv,p=pv?((d/pv)*100).toFixed(1):0;return`<div class="gc"><div class="gc-compare">${label}</div><div class="gc-l">${lbl}</div><div class="gc-v ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${fmt(d)}</div><div class="gc-s ${d>=0?'pos':'neg'} blur-val">${d>=0?'+':''}${p}%</div>${scope&&cmp?gvSplitHTML(cmp.month,month,vw,scope,d):''}</div>`};
+  document.getElementById('gain-body').innerHTML=`<div class="gain-grid">${gc(t.gesamt,prev?.gesamt,'Gesamtvermögen','gesamt')}${gc(t.cash,prev?.cash,'Cash')}${gc(t.anlagen,prev?.anlagen,'Anlagen','anlagen')}</div>`;
 }
 function switchGP(p,btn){
   gainPeriod=p;
@@ -4527,7 +4568,7 @@ function renderCatCards(month,e,t,view){
   const cmpLbl=prevMonth?'vs. '+fmtM(prevMonth)+(cmp.truncated?' (ältester verfügbarer)':''):'';
   const secDelta=(d,pv)=>d===null?'':`<div class="blur-val" style="font-size:9.5px;color:${d>=0?'var(--gr)':'var(--rd)'};font-family:var(--fm)">${d>=0?'+':''}${fmt(d)}${pv>0?' ('+(d>=0?'+':'')+(d/pv*100).toFixed(1)+'%)':''}</div><div style="font-size:8.5px;color:var(--tx3);font-family:var(--fm)">${cmpLbl}</div>`;
   const gvOf=(key,mth)=>{const d=db[mth];if(!d)return null;const ps=view==='p1'?['ich']:view==='p2'?['partner']:(settings.kinderEnabled?['ich','partner','kinder']:['ich','partner']);let s=0,has=false;ps.forEach(p=>{const v=d[p]?.['gv_'+key];if(typeof v==='number'){s+=v;has=true}});return has?s:null};
-  const gvLine=item=>{if(!item.trackPerformance||!prevMonth)return '';const g1=gvOf(item.id,month),g0=gvOf(item.id,prevMonth);if(g1===null||g0===null)return '';const dg=g1-g0;return `<div class="blur-val" style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:1px">G/V-Veränderung: <span style="color:${dg>=0?'var(--gr)':'var(--rd)'}">${dg>=0?'+':''}${fmt(dg)}</span></div>`};
+  const gvLine=item=>{if(!item.trackPerformance||!prevMonth)return '';const g1=gvOf(item.id,month),g0=gvOf(item.id,prevMonth);if(g1===null||g0===null)return '';const dg=g1-g0;const dv=(getVal(item.id)-(getPrevVal(item.id)||0))-dg;return `<div class="blur-val" style="font-size:9px;color:var(--tx3);font-family:var(--fm);margin-top:1px">davon G/V: <span style="color:${dg>=0?'var(--gr)':'var(--rd)'}">${dg>=0?'+':''}${fmt(dg)}</span> · ohne G/V: <span style="color:${dv>=0?'var(--gr)':'var(--rd)'};font-weight:500">${dv>=0?'+':''}${fmt(dv)}</span></div>`};
   const prevDb=prevMonth?db[prevMonth]:null;
   const prevI=prevDb?.ich||{},prevP=prevDb?.partner||{},prevK=prevDb?.kinder||{};
 
@@ -4539,7 +4580,7 @@ function renderCatCards(month,e,t,view){
   const fmtDelta=(cur,prev)=>{if(prev===null||prev===undefined)return '';const d=cur-prev;if(d===0)return '';const pc=prev>0?' ('+(d>0?'+':'')+(d/prev*100).toFixed(1)+'%)':'';return `<span class="blur-val" style="font-size:9.5px;color:${d>0?'var(--gr)':'var(--rd)'};font-family:var(--fm);margin-left:4px">${d>0?'+':''}${fmt(d)}${pc}</span>`;};
 
   // ── Section builder ──
-  function mkSection(icon, title, color, items, total, prevTotal){
+  function mkSection(icon, title, color, items, total, prevTotal, scope){
     if(!items.length||total===0)return '';
     const delta=prevTotal!==null?total-prevTotal:null;
     const isSingle=items.length===1;
@@ -4555,7 +4596,7 @@ function renderCatCards(month,e,t,view){
           </div>
         </div>
         <div style="text-align:right">
-          ${fmtD(total,color)}${secDelta(delta,prevTotal)}
+          ${fmtD(total,color)}${secDelta(delta,prevTotal)}${scope&&delta!==null?gvSplitHTML(prevMonth,month,view,scope,delta):''}
         </div>
       </div>
       ${gesamtRef>0?`<div style="height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:8px 0 2px"><div style="height:100%;width:${(total/gesamtRef*100).toFixed(1)}%;background:${color};border-radius:2px"></div></div><div style="font-size:9px;color:var(--tx3);font-family:var(--fm);text-align:right">${(total/gesamtRef*100).toFixed(1)}% des Vermögens</div>`:''}`;
@@ -4643,9 +4684,9 @@ function renderCatCards(month,e,t,view){
   }
 
   // ── Detail Sections ──
-  cont.insertAdjacentHTML('beforeend',mkSection('📈','Anlagen','var(--gr)',freeAnlItems,anlTot,prevAnl));
+  cont.insertAdjacentHTML('beforeend',mkSection('📈','Anlagen','var(--gr)',freeAnlItems,anlTot,prevAnl,'anlagen'));
   cont.insertAdjacentHTML('beforeend',mkSection('💵','Cash','var(--bl)',freeCashItems,cashTot,prevCash));
-  if(s3aItems.length)cont.insertAdjacentHTML('beforeend',mkSection('🏦','Säule 3a','var(--am)',s3aItems,s3aTot,prevS3a));
+  if(s3aItems.length)cont.insertAdjacentHTML('beforeend',mkSection('🏦','Säule 3a','var(--am)',s3aItems,s3aTot,prevS3a,'s3a'));
   if(pkItems.length)cont.insertAdjacentHTML('beforeend',mkSection('🏛','Pensionskasse (PK)','var(--vi)',pkItems,pkTot,prevPK));
 }
 
