@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='52.0.0';
+const APP_VERSION='53.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -906,6 +906,33 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
 .gc-split>div{display:flex;justify-content:space-between;gap:8px;font-size:10px;font-family:var(--fm);color:var(--tx2)}
 .gc-split>div>span:first-child{font-family:var(--fb);color:var(--tx3)}
 .gc-split-note{display:block!important;font-size:9px!important;color:var(--am)!important;line-height:1.4;font-family:var(--fb)}
+
+/* ══ FRONTEND REDESIGN v53 ══ */
+:root{--sw:248px;--bg:#0b1110;--bg1:#111a18;--bg2:#15201d;--bg3:#1b2925;--bg4:#243630;--bdr:rgba(210,235,222,.085);--bdr2:rgba(210,235,222,.16);--tx:#edf5ef;--tx2:#a8b9af;--tx3:#71857a;--gr:#72d6a0;--grd:#2ea66b;--gbg:rgba(89,201,140,.10);--gbdr:rgba(89,201,140,.24);--rd:#ff8585;--rdbg:rgba(255,133,133,.09);--rdbdr:rgba(255,133,133,.2);--bl:#83b9f5;--am:#e9bd70;--vi:#b9a0f5;--shadow:0 10px 30px rgba(0,0,0,.16)}
+body.light-theme{--bg:#f3f6f3;--bg1:#ffffff;--bg2:#ffffff;--bg3:#edf2ee;--bg4:#e2eae4;--bdr:rgba(25,55,38,.09);--bdr2:rgba(25,55,38,.16);--tx:#1b2b22;--tx2:#526459;--tx3:#7e9084;--gr:#198754;--grd:#147448;--gbg:rgba(25,135,84,.08);--gbdr:rgba(25,135,84,.2);--rd:#c53c3c;--rdbg:rgba(197,60,60,.07);--rdbdr:rgba(197,60,60,.18);--bl:#286bb3;--am:#a66b10;--vi:#7650b5;--shadow:0 8px 24px rgba(26,55,38,.06)}
+body{font-size:14px;line-height:1.55;letter-spacing:.005em}
+.shell{grid-template-columns:var(--sw) minmax(0,1fr);background:var(--bg)}
+.sidebar{background:var(--bg1);border-right:1px solid var(--bdr);padding:8px 9px;box-shadow:4px 0 24px rgba(0,0,0,.04)}
+.logo-wrap{padding:17px 14px 18px;border-bottom:1px solid var(--bdr);margin:0 3px 10px}
+.logo-mark{gap:10px}.gem{width:20px;height:20px;border-radius:5px;clip-path:none;transform:rotate(45deg);background:linear-gradient(135deg,var(--gr),#3b9f75)}.logo-t{font-family:var(--fb);font-size:17px;font-style:normal;font-weight:650;letter-spacing:-.5px}.logo-id{font-size:8px;letter-spacing:.08em}
+.nav-g{padding:10px 5px 0}.nav-lbl{font-size:9px;font-weight:600;letter-spacing:.12em;padding:0 11px 8px;color:var(--tx3)}
+.nb{font-size:12.5px;font-weight:450;padding:10px 11px;gap:10px;border-radius:9px;margin-bottom:3px;color:var(--tx2)}.nb svg{width:15px;height:15px;opacity:.7}.nb:hover{background:var(--bg3)}.nb.active{background:var(--gbg);color:var(--gr);box-shadow:inset 3px 0 0 var(--gr);font-weight:600}.nb.active svg{opacity:1}
+.sb-foot{padding:13px 9px 10px;margin:12px 3px 0}.foot-btn,.privacy-btn{border-radius:9px;padding:8px;font-size:11px}
+.main{padding:34px clamp(18px,3.3vw,52px) 54px;max-width:1700px;width:100%;margin:0 auto}
+.page{max-width:1420px;margin:0 auto}.ph{padding:0 0 20px;margin:0 0 20px;border-bottom:1px solid var(--bdr);align-items:flex-end}.pt{font-family:var(--fb);font-size:27px;font-weight:650;letter-spacing:-.8px;line-height:1.2}.ps{font-size:12px;color:var(--tx3);margin-top:6px}.ph-ctrl{gap:9px}
+.view-toggle{padding:3px;background:var(--bg3);border:1px solid var(--bdr);border-radius:10px}.vt-btn{padding:7px 12px;font-size:11px;border-radius:7px}.vt-btn.active{background:var(--bg1);box-shadow:0 1px 5px rgba(0,0,0,.12);color:var(--tx)}
+.mc,.widget,.wealth-total,.wealth-mix,.wealth-card{border:1px solid var(--bdr);border-radius:14px;box-shadow:var(--shadow)}.mc{padding:17px 18px;background:var(--bg1)}.mc.hero{background:linear-gradient(135deg,var(--gbg),var(--bg1));border-color:var(--gbdr)}.mc-l{font-size:11px;font-weight:550;letter-spacing:.025em;color:var(--tx3)}.mc-v{font-size:24px;font-weight:650;letter-spacing:-.7px;margin:7px 0 5px}.mc-s,.mc-d{font-size:11px}
+.widget{background:var(--bg1);margin-bottom:14px;overflow:hidden}.widget-hd{padding:15px 18px;border-bottom:1px solid var(--bdr)}.widget-title{font-size:13px;font-weight:650;letter-spacing:-.1px}.widget-title-sub{font-size:10px}.widget-body{padding:16px 18px}
+.btn{border-radius:9px;padding:9px 14px;font-weight:600;font-size:11.5px}.btn-g{box-shadow:0 2px 8px rgba(46,166,107,.15)}.btn-gh,.btn-rd{border-radius:9px}.inp,.input,.select,input[type="month"],select,textarea{border-radius:9px}
+.bptab,.eing-tab-btn{border-radius:8px;padding:8px 13px;font-size:11.5px;font-weight:550}.bptab.active,.eing-tab-btn.active{background:var(--bg1);box-shadow:0 1px 5px rgba(0,0,0,.12)}
+.table-wrap,table{border-radius:10px;overflow:hidden}th{font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--tx3)}
+.empty{border:1px dashed var(--bdr2);border-radius:14px;padding:36px 20px;background:var(--bg1)}
+.wealth-total{padding:24px;background:linear-gradient(145deg,var(--gbg),var(--bg1))}.wealth-total-value{font-size:clamp(28px,3vw,40px)}.wealth-card{background:var(--bg1)}
+.saving-feature{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(250px,.8fr);gap:14px;padding:22px 24px;margin:0 0 18px;background:linear-gradient(120deg,rgba(39,132,88,.16),var(--bg1) 72%);border:1px solid var(--gbdr);border-radius:16px;box-shadow:var(--shadow)}
+.saving-feature-main{min-width:0}.saving-eyebrow{font-family:var(--fm);font-size:9px;letter-spacing:.1em;color:var(--gr);font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:12px}.saving-pulse{width:7px;height:7px;border-radius:50%;background:var(--gr);box-shadow:0 0 0 4px var(--gbg)}.saving-feature-label{font-size:12px;color:var(--tx2)}.saving-feature-value{font-family:var(--fm);font-size:clamp(28px,3.5vw,42px);font-weight:600;letter-spacing:-1.4px;line-height:1.2;margin:7px 0}.saving-feature-sub{font-size:11px;color:var(--tx3)}.saving-feature-side{display:grid;grid-template-columns:1fr;align-content:center;gap:9px;padding-left:18px;border-left:1px solid var(--bdr)}.saving-mini{display:flex;align-items:center;justify-content:space-between;gap:10px}.saving-mini span{font-size:10.5px;color:var(--tx3)}.saving-mini strong{font-family:var(--fm);font-size:13px;white-space:nowrap}.saving-feature-foot{grid-column:1/-1;border-top:1px solid var(--bdr);padding-top:10px;margin-top:2px;font-size:10px;color:var(--tx3);line-height:1.5}.saving-chart-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;font-size:11px;color:var(--tx3)}.saving-chart-meta strong{font-family:var(--fm);font-size:12px;color:var(--gr)}.saving-chart-note{font-size:10px;color:var(--tx3);margin-top:10px;line-height:1.5}
+@media(max-width:900px){.shell{grid-template-columns:1fr}.main{padding:24px 18px 40px}.saving-feature{grid-template-columns:1fr}.saving-feature-side{padding:13px 0 0;border-left:0;border-top:1px solid var(--bdr)}}
+@media(max-width:600px){.main{padding:18px 12px 34px}.ph{align-items:flex-start;gap:12px;flex-direction:column}.pt{font-size:24px}.ph-ctrl{width:100%;flex-wrap:wrap}.saving-feature{padding:17px;border-radius:13px}.saving-feature-value{font-size:30px}.saving-mini span{font-size:10px}.mc{padding:13px}.mc-v{font-size:20px}.widget-hd,.widget-body{padding-left:13px;padding-right:13px}}
+
 </style>
 </head>
 <body>
@@ -4190,7 +4217,26 @@ function renderSummary(){
   else insights.push({cls:'pos',icon:'✓',title:`Ausgewogene Allokation: ${anlPct.toFixed(0)}% Anlagen`,desc:`${cashPct.toFixed(0)}% Cash für Liquidität, ${anlPct.toFixed(0)}% investiert.`});
   if(mCount>=3)insights.push({cls:avgMonthly>=0?'pos':'info',icon:'📈',title:`Ø ${avgMonthly>=0?'+':''}${fmt(avgMonthly)} / Monat`,desc:`Über ${mCount} Monate — annualisiert ca. ${mCount>=12?((totalGain/tFirst.gesamt*100/mCount*12).toFixed(1)):((totalGain/tFirst.gesamt*100).toFixed(1))}%.`});
 
-  let h=`<div class="mr mc4">
+  const saving=savingsSummary(vw);
+  const savingLast=saving.last;
+  const savingValue=savingLast?savingLast.monthly:0;
+  const savingColor=savingValue>=0?'var(--gr)':'var(--rd)';
+  const savingCoverage=savingLast?(savingLast.uncovered>0?`${savingLast.uncovered} Konto/Konten ohne vollständige G/V-Angabe`:'G/V-Tracking vollständig für erfasste Anlagekonten'):'Mindestens zwei Monate erforderlich';
+  let h=`<section class="saving-feature">
+    <div class="saving-feature-main">
+      <div class="saving-eyebrow"><span class="saving-pulse"></span> ECHTE SPARLEISTUNG · OHNE ANLAGEGEWINNE</div>
+      <div class="saving-feature-label">Vermögenszuwachs ohne erfasste Anlage-G/V · letzter Zeitraum</div>
+      <div class="saving-feature-value blur-val" style="color:${savingColor}">${savingLast?`${savingValue>=0?'+':''}${fmt(Math.round(savingValue))}`:'–'}</div>
+      <div class="saving-feature-sub">${savingLast?`${fmtM(savingLast.prev)} → ${fmtM(savingLast.month)}${savingLast.span>1?` · Ø pro Monat über ${savingLast.span} Monate`:''}`:'Noch keine Vergleichsmonate vorhanden'}</div>
+    </div>
+    <div class="saving-feature-side">
+      <div class="saving-mini"><span>Ø pro Monat · letzte ${saving.last12.length} Perioden</span><strong class="blur-val">${saving.last12.length?`${saving.avg>=0?'+':''}${fmt(Math.round(saving.avg))}`:'–'}</strong></div>
+      <div class="saving-mini"><span>Aufsummiert · letzte 12 Perioden</span><strong class="blur-val">${saving.last12.length?`${saving.total12>=0?'+':''}${fmt(Math.round(saving.total12))}`:'–'}</strong></div>
+      <div class="saving-mini"><span>Dieses Jahr</span><strong class="blur-val">${saving.ytd>=0?'+':''}${fmt(Math.round(saving.ytd))}</strong></div>
+    </div>
+    <div class="saving-feature-foot">${savingCoverage}. Berechnung: Veränderung des Gesamtvermögens inkl. PK minus erfasste Marktbewegungen. PK-Zins und nicht erfasste Anlage-G/V sind darin nicht separat abziehbar.</div>
+  </section>
+  <div class="mr mc4">
     <div class="mc hero"><div class="mc-l">Vermögen (ohne PK)</div><div class="mc-v blur-val">${fmt(tLast.gesamt)}</div><div class="mc-d ${mom>=0?'pos':'neg'} blur-val">${mom>=0?'+':''}${fmt(mom)} vs. Vormonat</div></div>
     <div class="mc"><div class="mc-l">Anlagen + 3a</div><div class="mc-v blur-val">${fmt(tLast.anlagen+tLast.s3aTotal)}</div><div class="mc-s mut">${((tLast.anlagen+tLast.s3aTotal)/Math.max(1,tLast.gesamt)*100).toFixed(0)}%</div></div>
     <div class="mc"><div class="mc-l">Cash</div><div class="mc-v blur-val">${fmt(tLast.cash)}</div><div class="mc-s mut">${(tLast.cash/Math.max(1,tLast.gesamt)*100).toFixed(0)}%</div></div>
@@ -4247,6 +4293,14 @@ function renderSummary(){
     h+=mkWidget('sum-chart',`Verlauf (${cms.length} Monate)`,
       `<div class="cwrap" style="height:200px"><canvas id="sum-chart-c" role="img" aria-label="Verlauf">Verlauf</canvas></div>
        <div class="cleg"><div class="cli"><span class="cldot" style="background:#4ade80"></span>${viewLabel}</div>${vw==='gesamt'?`<div class="cli"><span class="cldot" style="background:#60a5fa"></span>${n1()}</div><div class="cli"><span class="cldot" style="background:#a78bfa"></span>${n2()}</div>`:''}</div>`);
+  }
+
+  // Sparleistung ohne Anlage-G/V – separat vom Markt-Wachstum
+  if(saving.series.length){
+    h+=mkWidget('sum-savings-chart','Sparleistung ohne Anlagegewinne',
+      `<div class="saving-chart-meta"><span>Monatlicher Vermögenszuwachs ohne erfasste Anlage-G/V</span><strong class="blur-val">Ø ${fmt(Math.round(saving.avg))} / Mt.</strong></div>
+       <div class="cwrap" style="height:190px"><canvas id="sum-savings-chart-c" role="img" aria-label="Monatliche Sparleistung ohne Anlagegewinne">Sparleistung</canvas></div>
+       <div class="saving-chart-note">Positive Werte bedeuten Vermögensaufbau aus Einzahlungen und sonstigen Veränderungen – nicht aus erfassten Kursgewinnen. PK-Zinsen sowie fehlende G/V-Angaben bleiben enthalten.</div>`);
   }
 
   // Allocation snapshot — uses latest month
@@ -4321,6 +4375,45 @@ function renderSummary(){
     }
     if(widgetState['sum-chart']){const w=document.getElementById('w-sum-chart');if(w){w.classList.add('collapsed');const t=w.querySelector('.widget-toggle');if(t)t.textContent='▶'}}
   }
+  if(saving.series.length){
+    const sv=saving.series.slice(-12),el=document.getElementById('sum-savings-chart-c');
+    dC('sum-savings');
+    if(el&&typeof Chart!=='undefined'){
+      const opts=cOpts();
+      opts.plugins.legend={display:false};
+      opts.scales.y.beginAtZero=false;
+      charts['sum-savings']=new Chart(el.getContext('2d'),{type:'bar',data:{labels:sv.map(x=>fmtM(x.month)),datasets:[{label:'Sparleistung ohne Anlage-G/V',data:sv.map(x=>Math.round(x.monthly)),backgroundColor:sv.map(x=>x.monthly>=0?'rgba(22,163,74,.68)':'rgba(220,38,38,.62)'),borderRadius:5,borderSkipped:false}]},options:opts});
+    }
+    if(widgetState['sum-savings-chart']){const w=document.getElementById('w-sum-savings-chart');if(w){w.classList.add('collapsed');const t=w.querySelector('.widget-toggle');if(t)t.textContent='▶'}}
+  }
+}
+
+// ══ SPARLEISTUNG OHNE ANLAGE-G/V ══
+// Ermittelt die Veränderung des Gesamtvermögens inkl. PK abzüglich erfasster Marktbewegungen.
+// Bei Datenlücken wird der Wert als Monatsdurchschnitt über den Abstand ausgewiesen.
+function calcSavingsSeries(view){
+  const ms=validMonths(view||currentView);
+  const out=[];
+  for(let i=1;i<ms.length;i++){
+    const prev=ms[i-1],month=ms[i];
+    const [y0,m0]=prev.split('-').map(Number),[y1,m1]=month.split('-').map(Number);
+    const span=Math.max(1,(y1-y0)*12+(m1-m0));
+    const t0=getT(prev,view),t1=getT(month,view);
+    const delta=(t1.gesamtMitPK||0)-(t0.gesamtMitPK||0);
+    const split=gvSplit(prev,month,view,'gesamt');
+    const withoutMarket=delta-split.market;
+    out.push({month,prev,span,delta,market:split.market,savings:withoutMarket,monthly:withoutMarket/span,covered:split.covered,uncovered:split.uncovered});
+  }
+  return out;
+}
+function savingsSummary(view){
+  const series=calcSavingsSeries(view);
+  const last=series[series.length-1]||null;
+  const last12=series.slice(-12);
+  const y=series.length?series[series.length-1].month.slice(0,4):String(new Date().getFullYear());
+  const ytd=series.filter(x=>x.month.startsWith(y)).reduce((a,x)=>a+x.savings,0);
+  const avg=last12.length?last12.reduce((a,x)=>a+x.monthly,0)/last12.length:0;
+  return {series,last,last12,ytd,avg,total12:last12.reduce((a,x)=>a+x.savings,0)};
 }
 
 // ══ ZUWACHS OHNE G/V ══
