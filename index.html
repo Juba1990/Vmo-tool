@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='53.0.0';
+const APP_VERSION='54.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -4175,6 +4175,7 @@ function renderSummary(){
   const deltaP=tLast_P.gesamt-tPrev_P.gesamt;
   const deltaK=tLast_K&&tPrev_K?tLast_K.gesamt-tPrev_K.gesamt:0;
   const deltaPersons=deltaI+deltaP+deltaK;
+  const mom=tLast.gesamt-tPrev.gesamt;
   const deltaMismatch=Math.abs(mom-deltaPersons)>0.01;
   const[cy]=last.split('-');
   const ytdM=ytdStart(last,vw);const tYTD=getT(ytdM,vw);
@@ -4187,7 +4188,7 @@ function renderSummary(){
   const ms12=ms.slice(-12);const gain12=tLast.gesamt-(ms12.length>1?getT(ms12[0],vw).gesamt:tFirst.gesamt);
   const pct12=ms12.length>1?(gain12/(getT(ms12[0],vw).gesamt)*100).toFixed(1):0;
   const anlPct=(tLast.anlagen/tLast.gesamt*100)||0;const cashPct=(tLast.cash/tLast.gesamt*100)||0;
-  const mom=tLast.gesamt-tPrev.gesamt;const momPct=tPrev.gesamt?((mom/tPrev.gesamt)*100).toFixed(1):0;
+  const momPct=tPrev.gesamt?((mom/tPrev.gesamt)*100).toFixed(1):0;
 
   // Insights
   const insights=[];
