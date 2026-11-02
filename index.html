@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='54.0.0';
+const APP_VERSION='55.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -2046,7 +2046,6 @@ function getBfsComparableWealth(month, view){
   else if(view==='p3')persons=['kinder'];
   else{
     persons=['ich','partner'];
-    if(settings.kinderEnabled)persons.push('kinder');
   }
   persons.forEach(p=>{
     const entry=db[month][p]||{};
@@ -2083,7 +2082,6 @@ function computeAccountPerformance(month, view){
   else if(view==='p3')persons=['kinder'];
   else{
     persons=['ich','partner'];
-    if(settings.kinderEnabled)persons.push('kinder');
   }
   const accounts=tracked.map(a=>{
     let wert=0, gv=0, hasGv=false;
@@ -2564,7 +2562,6 @@ function getCashTotal(month, view){
   else if(view==='p3')persons=['kinder'];
   else{
     persons=['ich','partner'];
-    if(settings.kinderEnabled)persons.push('kinder');
   }
   persons.forEach(p=>{
     const entry=db[month][p]||{};
@@ -3826,11 +3823,11 @@ function calcT(e){
 function mgd(m){
   const i=db[m]?.ich||{},p=db[m]?.partner||{},k=db[m]?.kinder||{};
   const e={};
-  allItemKeys().forEach(key=>{e[key]=(i[key]||0)+(p[key]||0)+(settings.kinderEnabled?(k[key]||0):0)});
+  allItemKeys().forEach(key=>{e[key]=(i[key]||0)+(p[key]||0)});
   e.inv_i=i.investiert||0;e.inv_p=p.investiert||0;e.inv_k=k.investiert||0;
-  e.investiert=e.inv_i+e.inv_p+(settings.kinderEnabled?e.inv_k:0);
+  e.investiert=e.inv_i+e.inv_p;
   e.ein_i=i.einkommen||0;e.ein_p=p.einkommen||0;e.ein_k=k.einkommen||0;
-  e.einkommen=e.ein_i+e.ein_p+(settings.kinderEnabled?e.ein_k:0);
+  e.einkommen=e.ein_i+e.ein_p;
   return e;
 }
 function personEntry(m,person){const pe=db[m]?.[person]||{};const e={};allItemKeys().forEach(k=>{e[k]=pe[k]||0});e.einkommen=pe.einkommen||0;e.investiert=pe.investiert||0;return e}
@@ -4345,7 +4342,7 @@ function renderSummary(){
 function viewPersons(view){
   if(view==='p1')return ['ich'];
   if(view==='p2')return ['partner'];
-  return settings.kinderEnabled?['ich','partner','kinder']:['ich','partner'];
+  return ['ich','partner'];
 }
 // scope: 'gesamt' (ohne PK) | 'anlagen' (freie Anlagen) | 's3a'
 function gvSplit(prevMonth,month,view,scope){
@@ -4403,6 +4400,8 @@ function renderVermoegensbild(){
   const s3a=t.s3aTotal||0;
   const pk=t.pkTotal||0;
   const total=free+s3a+pk;
+  const childT=settings.kinderEnabled?personT(month,'kinder'):null;
+  const childTotal=childT?(childT.cash+childT.anlagen+childT.s3aTotal+childT.pkTotal):0;
   const liquidPct=total>0?free/total*100:0;
   const cashPct=free>0?t.cash/free*100:0;
   const pct=(v)=>total>0?(v/total*100):0;
@@ -4431,7 +4430,8 @@ function renderVermoegensbild(){
     <div class="wealth-card"><div class="wealth-card-label">Säule 3a</div><div class="wealth-card-value blur-val" style="color:#8b5cf6">${fmt(s3a)}</div><div class="wealth-card-meta">Separat vom frei verfügbaren Vermögen</div></div>
     <div class="wealth-card"><div class="wealth-card-label">Pensionskasse</div><div class="wealth-card-value blur-val" style="color:#d97706">${fmt(pk)}</div><div class="wealth-card-meta">Gemäss erfassten PK-Konten</div></div>
   </div>
-  <div class="wealth-note"><strong>So ist die Kennzahl definiert:</strong> Frei verfügbar umfasst Cash und normale Anlagen. Säule 3a und PK werden separat ausgewiesen. Die Werte stammen direkt aus euren bestehenden Konteneinträgen; es wird nichts doppelt erfasst. Der Gesamtbetrag ist eine Vermögensübersicht, keine Aussage über den heute steuer- oder bezugsfreien Betrag.</div>
+  ${settings.kinderEnabled?`<div class="wealth-card" style="margin-top:12px;border:1px solid var(--bdr)"><div class="wealth-card-label">${escapeHTML(nK())}vermögen · separat</div><div class="wealth-card-value blur-val" style="color:var(--am)">${fmt(childTotal)}</div><div class="wealth-card-meta">Nicht im Haushalts- bzw. Erwachsenenvermögen enthalten. Die App führt derzeit ein gemeinsames Kinder-Konto; eine Aufteilung auf einzelne Kinder ist nicht hinterlegt.</div></div>`:''}
+  <div class="wealth-note"><strong>So ist die Kennzahl definiert:</strong> Das Haushaltsvermögen umfasst nur die Konten der beiden Erwachsenen. Kindervermögen wird separat ausgewiesen. Frei verfügbar umfasst Cash und normale Anlagen. Säule 3a und PK werden separat ausgewiesen. Die Werte stammen direkt aus euren bestehenden Konteneinträgen; es wird nichts doppelt erfasst.</div>
   <div class="widget"><div class="widget-hd"><span class="widget-title">Entwicklung der Vermögensstruktur</span><span class="widget-title-sub">Letzte ${recent.length} erfasste Monate</span></div>
     <div class="widget-body"><div class="cwrap" style="height:260px"><canvas id="wealth-history-chart" role="img" aria-label="Historische Entwicklung nach Vermögensart"></canvas></div>
       <div class="cleg"><div class="cli"><span class="cldot" style="background:#16a34a"></span>Cash</div><div class="cli"><span class="cldot" style="background:#3b82f6"></span>Anlagen</div><div class="cli"><span class="cldot" style="background:#8b5cf6"></span>Säule 3a</div><div class="cli"><span class="cldot" style="background:#d97706"></span>PK</div></div>
@@ -5887,88 +5887,57 @@ async function addBudgetItem(catId){
 // Für Singles höher (kein Splitting): ~4-5 Prozentpunkte mehr
 const SOZIALABZUEGE_PCT=0.12; // AHV + ALV + NBU + moderater BVG-Beitrag
 
-function estimateSteuerBS(bruttoJahr, kinder, istVerheiratet=true){
-  // Realistic effective combined tax rate (Cantonal+Federal) for Basel-Stadt
-  // Progressive calculation with proper deductions
-  // Based on BS Staffelung 2024 + Bundessteuer DBG
-  if(bruttoJahr<=0)return 0;
-
-  // Standard deductions (rough, realistic for typical households)
-  const sozialAbzug=bruttoJahr*0.10; // AHV/IV/EO + ALV (deductible)
-  const bvgAbzug=Math.min(bruttoJahr*0.07, 30000); // PK Beiträge
-  const pauschalAbzug=istVerheiratet?5800:2600; // Berufsauslagen pauschal
-  const kinderAbzug=(kinder||0)*7800; // BS: ~7800/Kind
-  const versAbzug=istVerheiratet?5200:2600; // Versicherungsprämien
-  const verheiratetenAbzug=istVerheiratet?1300:0;
-
-  // Steuerbares Einkommen
-  let steuerbar=Math.max(0, bruttoJahr - sozialAbzug - bvgAbzug - pauschalAbzug - kinderAbzug - versAbzug - verheiratetenAbzug);
-
-  // BS Kantonssteuer Staffelung 2024 (Verheiratete): grobe Schätzung
-  // Tarif für Splitting (Verheiratete): grosszügiger als Singles
-  // Wir schätzen Effektive Belastung auf steuerbares Einkommen
+function estimateSteuerBS(bruttoJahr, kinderAnteil=0, istVerheiratet=false){
+  // Grobe Einzelveranlagungs-Schätzung Basel-Stadt. Unverheiratete werden
+  // individuell veranlagt; Kinderabzug wird hier anteilig je Elternteil verteilt.
+  if(bruttoJahr<=0)return {kantonal:0,bund:0,total:0,steuerbar:0};
+  const sozialAbzug=bruttoJahr*0.10;
+  const bvgAbzug=Math.min(bruttoJahr*0.07,30000);
+  const pauschalAbzug=2600;
+  const kinderAbzug=Math.max(0,kinderAnteil)*7800;
+  const versAbzug=2600;
+  const steuerbar=Math.max(0,bruttoJahr-sozialAbzug-bvgAbzug-pauschalAbzug-kinderAbzug-versAbzug);
+  // Vereinfachte Progressionskurven als Näherung, keine amtliche Tarifberechnung.
   let kantonal;
-  if(istVerheiratet){
-    if(steuerbar<=20000)kantonal=0;
-    else if(steuerbar<=50000)kantonal=(steuerbar-20000)*0.06;
-    else if(steuerbar<=100000)kantonal=1800+(steuerbar-50000)*0.13;
-    else if(steuerbar<=200000)kantonal=8300+(steuerbar-100000)*0.21;
-    else if(steuerbar<=400000)kantonal=29300+(steuerbar-200000)*0.255;
-    else kantonal=80300+(steuerbar-400000)*0.265;
-  }else{
-    if(steuerbar<=15000)kantonal=0;
-    else if(steuerbar<=40000)kantonal=(steuerbar-15000)*0.075;
-    else if(steuerbar<=80000)kantonal=1875+(steuerbar-40000)*0.16;
-    else if(steuerbar<=150000)kantonal=8275+(steuerbar-80000)*0.24;
-    else if(steuerbar<=300000)kantonal=25075+(steuerbar-150000)*0.27;
-    else kantonal=65575+(steuerbar-300000)*0.28;
-  }
-
-  // Direkte Bundessteuer 2024 (Verheiratete grösserzügiger)
+  if(steuerbar<=15000)kantonal=0;
+  else if(steuerbar<=40000)kantonal=(steuerbar-15000)*0.075;
+  else if(steuerbar<=80000)kantonal=1875+(steuerbar-40000)*0.16;
+  else if(steuerbar<=150000)kantonal=8275+(steuerbar-80000)*0.24;
+  else if(steuerbar<=300000)kantonal=25075+(steuerbar-150000)*0.27;
+  else kantonal=65575+(steuerbar-300000)*0.28;
   let bund;
-  if(istVerheiratet){
-    if(steuerbar<=30000)bund=0;
-    else if(steuerbar<=50000)bund=(steuerbar-30000)*0.01;
-    else if(steuerbar<=80000)bund=200+(steuerbar-50000)*0.02;
-    else if(steuerbar<=150000)bund=800+(steuerbar-80000)*0.04;
-    else if(steuerbar<=300000)bund=3600+(steuerbar-150000)*0.07;
-    else if(steuerbar<=900000)bund=14100+(steuerbar-300000)*0.115;
-    else bund=83100+(steuerbar-900000)*0.115;
-  }else{
-    if(steuerbar<=18000)bund=0;
-    else if(steuerbar<=30000)bund=(steuerbar-18000)*0.01;
-    else if(steuerbar<=60000)bund=120+(steuerbar-30000)*0.03;
-    else if(steuerbar<=100000)bund=1020+(steuerbar-60000)*0.06;
-    else if(steuerbar<=180000)bund=3420+(steuerbar-100000)*0.10;
-    else if(steuerbar<=800000)bund=11420+(steuerbar-180000)*0.115;
-    else bund=82720+(steuerbar-800000)*0.115;
-  }
-
-  const totalSteuer=Math.max(0, kantonal+bund);
-  return totalSteuer/bruttoJahr;
+  if(steuerbar<=18000)bund=0;
+  else if(steuerbar<=30000)bund=(steuerbar-18000)*0.01;
+  else if(steuerbar<=60000)bund=120+(steuerbar-30000)*0.03;
+  else if(steuerbar<=100000)bund=1020+(steuerbar-60000)*0.06;
+  else if(steuerbar<=180000)bund=3420+(steuerbar-100000)*0.10;
+  else if(steuerbar<=800000)bund=11420+(steuerbar-180000)*0.115;
+  else bund=82720+(steuerbar-800000)*0.115;
+  return {kantonal:Math.max(0,kantonal),bund:Math.max(0,bund),total:Math.max(0,kantonal+bund),steuerbar};
 }
 
-function calcPersonNetto(p, kinder, hhBrutto){
-  const bruttoEff = p.bruttoJahr * (p.pensum/100) + (p.bonusJahr||0);
-  const sozial = bruttoEff * SOZIALABZUEGE_PCT;
-  let steuerPct;
+function calcPersonNetto(p, kinderAnteil=0){
+  const bruttoEff=p.bruttoJahr*(p.pensum/100)+(p.bonusJahr||0);
+  const sozial=bruttoEff*SOZIALABZUEGE_PCT;
+  let steuerDetail;
   if(income.steuersatzMode==='manual'){
-    steuerPct = income.steuersatzManual/100;
+    const steuer=bruttoEff*(income.steuersatzManual/100);
+    steuerDetail={kantonal:0,bund:steuer,total:steuer,steuerbar:null,manual:true};
   }else{
-    const hb = (hhBrutto!==undefined) ? hhBrutto
-      : (income.p1.bruttoJahr*income.p1.pensum/100+(income.p1.bonusJahr||0)) + (income.p2.bruttoJahr*income.p2.pensum/100+(income.p2.bonusJahr||0));
-    steuerPct = estimateSteuerBS(hb, kinder, true);
+    steuerDetail=estimateSteuerBS(bruttoEff,kinderAnteil,false);
   }
-  const steuer = bruttoEff * steuerPct;
-  const netto = bruttoEff - sozial - steuer;
-  return {bruttoEff, sozial, steuer, steuerPct, netto};
+  const steuer=steuerDetail.total;
+  const steuerPct=bruttoEff>0?steuer/bruttoEff:0;
+  const netto=bruttoEff-sozial-steuer;
+  return {bruttoEff,sozial,steuer,steuerPct,steuerDetail,netto};
 }
-// Haushalt mit frei wählbaren Pensen und Kinderzahl; Steuer wird mit dem Szenario-Haushaltsbrutto geschätzt
-function calcHouseholdScenario(pen1, pen2, kinder){
-  const i1={...income.p1,pensum:pen1}, i2={...income.p2,pensum:pen2};
-  const hhB=(i1.bruttoJahr*i1.pensum/100+(i1.bonusJahr||0))+(i2.bruttoJahr*i2.pensum/100+(i2.bonusJahr||0));
-  const p1=calcPersonNetto(i1,kinder,hhB), p2=calcPersonNetto(i2,kinder,hhB);
-  const kinderzulageJahr=kinder*(income.kinderzulage||275)*12;
+// Unverheiratete Partner werden separat besteuert. Für die Schätzung werden
+// Kinderabzüge hälftig auf beide Eltern verteilt (anpassbare Annahme).
+function calcHouseholdScenario(pen1,pen2,kinder){
+  const i1={...income.p1,pensum:pen1},i2={...income.p2,pensum:pen2};
+  const kinderJeElternteil=Math.max(0,kinder||0)/2;
+  const p1=calcPersonNetto(i1,kinderJeElternteil),p2=calcPersonNetto(i2,kinderJeElternteil);
+  const kinderzulageJahr=(kinder||0)*(income.kinderzulage||275)*12;
   const bruttoJahrTotal=p1.bruttoEff+p2.bruttoEff;
   const nettoJahrTotal=p1.netto+p2.netto+kinderzulageJahr;
   return {p1,p2,kinderzulageJahr,bruttoJahrTotal,nettoJahrTotal,nettoMonat:nettoJahrTotal/12};
@@ -6133,6 +6102,10 @@ function renderBpPlan(){
           <span class="bp-num-suffix">CHF</span>
         </div>
       </div>
+      <div class="bp-field" style="background:var(--bg3);border-radius:8px;padding:9px 11px;margin-top:7px">
+        <div><div class="bp-field-lbl">Steuern pro Jahr (geschätzt)</div><div class="bp-field-hint">Bund ${fmt(hh.p1.steuerDetail.bund)} · Kanton/Gemeinde BS ${fmt(hh.p1.steuerDetail.kantonal)}</div></div>
+        <div class="bp-field-ctrl"><strong class="blur-val">${fmt(hh.p1.steuer)}</strong></div>
+      </div>
     </div>
 
     <div class="bp-pgroup">
@@ -6164,6 +6137,10 @@ function renderBpPlan(){
           <span class="bp-num-suffix">CHF</span>
         </div>
       </div>
+      <div class="bp-field" style="background:var(--bg3);border-radius:8px;padding:9px 11px;margin-top:7px">
+        <div><div class="bp-field-lbl">Steuern pro Jahr (geschätzt)</div><div class="bp-field-hint">Bund ${fmt(hh.p2.steuerDetail.bund)} · Kanton/Gemeinde BS ${fmt(hh.p2.steuerDetail.kantonal)}</div></div>
+        <div class="bp-field-ctrl"><strong class="blur-val">${fmt(hh.p2.steuer)}</strong></div>
+      </div>
     </div>
 
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--bdr)">
@@ -6176,10 +6153,7 @@ function renderBpPlan(){
           </div>
         </div>
       `:`
-        <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--tx2)">
-          <span>Geschätzter Steuersatz (BS, Familie, ${income.kinder} Kind${income.kinder===1?'':'er'})</span>
-          <span style="font-family:var(--fm);font-weight:500;color:var(--tx)">${avgSteuerPct.toFixed(1)}%</span>
-        </div>
+        <div style="font-size:11px;color:var(--tx2);line-height:1.55">Auto-Schätzung je Person: direkte Bundessteuer sowie Kantons- und Gemeindesteuer Basel-Stadt. Da ihr nicht verheiratet seid, wird jede Person separat berechnet. Die Kinderabzüge sind in dieser Schätzung hälftig verteilt. Vereinfachte Näherung – bitte mit dem offiziellen Steuerrechner prüfen.</div>
       `}
     </div>
   </div>
@@ -7437,17 +7411,19 @@ function renderBpIst(){
   </div>
 
   <div class="mr mc4" style="margin:12px 0 14px">
-    <div class="mc hero"><div class="mc-l">Effektiv gespart · erfasst</div><div class="mc-v blur-val">${fmt(savings.actualSavings)}</div><div class="mc-s mut">${savings.tracked.length} Monate mit Einkommen + Ausgaben</div></div>
+    <div class="mc"><div class="mc-l">Ist-Einkommen</div><div class="mc-v blur-val">${fmt(savings.actualIncome)}</div><div class="mc-s mut">${savings.tracked.length} vollständig erfasste Monate</div></div>
+    <div class="mc"><div class="mc-l">Ist-Ausgaben</div><div class="mc-v blur-val">${fmt(savings.actualExpenses)}</div><div class="mc-s mut">gleiche Monate wie Einkommen</div></div>
+    <div class="mc hero"><div class="mc-l">Effektiv gespart</div><div class="mc-v blur-val">${fmt(savings.actualSavings)}</div><div class="mc-s mut">Sparquote ${savings.actualIncome>0?(savings.actualSavings/savings.actualIncome*100).toFixed(1)+'%':'—'}</div></div>
     <div class="mc"><div class="mc-l">Ø Sparbetrag / Monat</div><div class="mc-v blur-val">${savings.avgActualSavings===null?'—':fmt(savings.avgActualSavings)}</div><div class="mc-s mut">nur vollständig erfasste Monate</div></div>
-    <div class="mc"><div class="mc-l">Plan-Sparbetrag / Monat</div><div class="mc-v blur-val">${fmt(savings.plannedSavings)}</div><div class="mc-s mut">Netto-Planincome minus Budgetplan</div></div>
-    <div class="mc"><div class="mc-l">Jahres-Schätzung</div><div class="mc-v blur-val" style="color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div><div class="mc-s mut">Ist bisher + ${savings.forecastMonths} × Plan-Sparbetrag</div></div>
+    <div class="mc"><div class="mc-l">Plan-Sparbetrag / Monat</div><div class="mc-v blur-val">${fmt(savings.plannedSavings)}</div><div class="mc-s mut">Plan-Nettoeinkommen minus Plan-Ausgaben</div></div>
+    <div class="mc"><div class="mc-l">Jahres-Schätzung</div><div class="mc-v blur-val" style="color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div><div class="mc-s mut">Ist-Monate + ${savings.forecastMonths} × Plan-Sparbetrag</div></div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
     <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Plan-Nettoeinkommen</div><div class="blur-val" style="font:500 13px var(--fm);margin-top:4px">${fmt(plannedIncome)}</div></div>
     <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Ø Ist-Ausgaben</div><div class="blur-val" style="font:500 13px var(--fm);margin-top:4px">${avgIst===null?'—':fmt(avgIst)}</div></div>
     <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Planincome minus Ø Ist-Ausgaben</div><div class="blur-val" style="font:600 13px var(--fm);margin-top:4px;color:${avgIst===null?'var(--tx3)':plannedIncome-avgIst>=0?'var(--gr)':'var(--rd)'}">${avgIst===null?'—':fmt(plannedIncome-avgIst)}</div></div>
   </div>
-  <div style="font-size:10px;color:var(--tx3);margin:-5px 0 12px;line-height:1.5">Jahres-Schätzung: vollständig erfasste Ist-Monate (Einkommen und Ausgaben) plus Plan-Sparbetrag für alle übrigen Monate. Fehlende Ist-Monate werden also nicht als null Sparen gewertet.</div>
+  <div style="font-size:10px;color:var(--tx3);margin:-5px 0 12px;line-height:1.5">Jahres-Schätzung: Summe der Sparbeträge aus Monaten mit erfasstem Einkommen UND Ausgaben plus Plan-Sparbetrag für die übrigen Monate. In der Tabelle bedeutet Δ/Mt: Ø Ist-Ausgaben minus Plan; ein positiver Wert heisst Mehr-Ausgaben als geplant.</div>
 
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr);background:var(--bg)">
     <table style="border-collapse:collapse;width:100%;min-width:700px">
@@ -7739,7 +7715,7 @@ function getFireDefaults(personFilter){
   const ms=validMonths('gesamt'); const lastM=ms.length?ms[ms.length-1]:null;
   let freeAssets=0, s3aAssets=0, pkFromCats=0;
   if(lastM){
-    ['ich','partner','kinder'].forEach(p=>{
+    ['ich','partner'].forEach(p=>{
       const e=db[lastM]?.[p]||{};
       getCats().forEach(g=>g.items.forEach(it=>{
         const v=e[it.id]; if(typeof v!=='number'||v===0)return;
