@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='58.0.0';
+const APP_VERSION='59.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1449,7 +1449,7 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
     <!-- BUDGETPLAN (Analyse) -->
     <div class="page" id="page-budgetplan">
       <div class="ph">
-        <div><div class="pt">Budgetplan</div><div class="ps" id="bp-sub">Ausbezahlte Gehälter nach Sozialabgaben · Steuern separat als Budgetausgabe</div></div>
+        <div><div class="pt">Budgetplan</div><div class="ps" id="bp-sub">Plan: Nettoeinkommen nach Steuern · Ist: Rücklagen separat vom Konsum</div></div>
       </div>
       <!-- Tab bar -->
       <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
@@ -5685,6 +5685,15 @@ function budgetTotals(){
   return{fix,var:vari,total:fix+vari};
 }
 
+// Steuer-Rücklagen sind im Budgetplan keine Konsumausgaben; die effektive Steuer
+// wird bereits in calcHousehold().nettoMonat berücksichtigt.
+function budgetTotalsWithoutTaxReserve(){
+  const b=getBudget().filter(c=>c.id!=='steuern');
+  const fix=b.reduce((a,c)=>a+budgetCatFix(c),0);
+  const vari=b.reduce((a,c)=>a+budgetCatVar(c),0);
+  return{fix,var:vari,total:fix+vari};
+}
+
 async function resetBudgetDefaults(){
   if(!await confirmX('Budget auf Standardwerte zurücksetzen? Alle eingetragenen Beträge gehen verloren.'))return;
   budget=JSON.parse(JSON.stringify(BUDGET_DEFAULT));
@@ -6002,7 +6011,7 @@ function renderBudgetplan(){
 function renderBpPlan(){
   const body=document.getElementById('budgetplan-body');
   const hh=calcHousehold();
-  const bt=budgetTotals();
+  const bt=budgetTotalsWithoutTaxReserve();
   const kita=calcKitaKosten();
 
   const kitaItem = getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita');
@@ -6010,7 +6019,7 @@ function renderBpPlan(){
   const kitaInBudget = kitaInBudgetAmt>0;
   const kitaExtra = kitaInBudget ? 0 : kita.monat;
   const ausgabenMonat = bt.total + kitaExtra;
-  const auszahlungsEinkommen = calcHouseholdPayout(hh);
+  const auszahlungsEinkommen = hh.nettoMonat;
   const ueberschussMonat = auszahlungsEinkommen - ausgabenMonat;
   const ueberschussJahr = ueberschussMonat * 12;
   const sparQuote = auszahlungsEinkommen>0 ? (ueberschussMonat/auszahlungsEinkommen*100) : 0;
@@ -6032,9 +6041,9 @@ function renderBpPlan(){
   <!-- HERO: 3 big metrics -->
   <div class="bp-hero">
     <div class="bp-hero-card primary">
-      <div class="bp-hero-label">Ausbezahltes Einkommen</div>
+      <div class="bp-hero-label">Haushaltsnettoeinkommen</div>
       <div class="bp-hero-value blur-val">${fmt(auszahlungsEinkommen)}</div>
-      <div class="bp-hero-sub">pro Monat · ${fmt(auszahlungsEinkommen*12)} / Jahr · vor Einkommenssteuer</div>
+      <div class="bp-hero-sub">pro Monat · ${fmt(auszahlungsEinkommen*12)} / Jahr · nach Sozialabgaben und Steuern</div>
       <div class="bp-hero-mini">
         <span class="bp-hero-mini-lbl">${n1()}</span>
         <span class="bp-hero-mini-val blur-val" style="color:var(--bl)">${fmt((hh.p1.bruttoEff-hh.p1.sozial)/12)}</span>
@@ -6375,25 +6384,24 @@ function renderWaterfall(hh, bt, kitaExtra, ueberschuss){
   const bruttoM = hh.bruttoJahrTotal/12;
   const sozialM = (hh.p1.sozial+hh.p2.sozial)/12;
   const zulageM = hh.kinderzulageJahr/12;
-  const nettoM = calcHouseholdPayout(hh);
-  const steuerReserve=(getBudget().find(c=>c.id==='steuern')?.items||[]).reduce((a,i)=>a+budgetItemAmt(i),0);
-  const fix = Math.max(0,bt.fix-steuerReserve), vari = bt.var;
-
-  // Running total list: Steuerrücklagen explizit ausweisen, damit Steuer nicht doppelt erscheint.
+  const steuerM = (hh.p1.steuer+hh.p2.steuer)/12;
+  const nettoM = hh.nettoMonat;
+  const fix = bt.fix, vari = bt.var;
+  const vorSteuer=bruttoM-sozialM+zulageM;
+  const nachSteuer=vorSteuer-steuerM;
   const steps=[
     {lbl:'Brutto-Einkommen',delta:bruttoM,cum:bruttoM,type:'start',icon:'💼'},
     {lbl:'Sozialabgaben (AHV, ALV, BVG)',delta:-sozialM,cum:bruttoM-sozialM,type:'neg',icon:'−'},
-    {lbl:'Kinderzulage',delta:zulageM,cum:nettoM,type:'pos',icon:'+'},
-    {lbl:'Ausbezahltes Einkommen (vor Steuer)',delta:nettoM,cum:nettoM,type:'total',icon:'🏦'},
-    {lbl:'Fixkosten (ohne Steuern)',delta:-fix,cum:nettoM-fix,type:'neg',icon:'−'},
-    {lbl:'Variable Kosten',delta:-vari,cum:nettoM-fix-vari,type:'neg',icon:'−'}
+    {lbl:'Kinderzulagen',delta:zulageM,cum:vorSteuer,type:'pos',icon:'+'},
+    {lbl:'Effektive Einkommenssteuern',delta:-steuerM,cum:nachSteuer,type:'neg',icon:'🧾'},
+    {lbl:'Haushaltsnettoeinkommen',delta:nachSteuer,cum:nachSteuer,type:'total',icon:'🏦'},
+    {lbl:'Fixkosten (ohne Steuern)',delta:-fix,cum:nachSteuer-fix,type:'neg',icon:'−'},
+    {lbl:'Variable Kosten',delta:-vari,cum:nachSteuer-fix-vari,type:'neg',icon:'−'}
   ];
-  if(steuerReserve>0)steps.push({lbl:'Steuerrücklagen',delta:-steuerReserve,cum:nettoM-fix-vari-steuerReserve,type:'neg',icon:'🧾'});
-  if(kitaExtra>0)steps.push({lbl:'Kita-Kosten (zusätzlich)',delta:-kitaExtra,cum:nettoM-fix-vari-steuerReserve-kitaExtra,type:'neg',icon:'−'});
+  if(kitaExtra>0)steps.push({lbl:'Kita-Kosten (zusätzlich)',delta:-kitaExtra,cum:nachSteuer-fix-vari-kitaExtra,type:'neg',icon:'−'});
   steps.push({lbl:ueberschuss>=0?'Überschuss / Sparrate':'Defizit',delta:ueberschuss,cum:ueberschuss,type:ueberschuss>=0?'final-pos':'final-neg',icon:ueberschuss>=0?'✓':'⚠'});
 
-  // Determine max for bar scaling (use brutto for top, netto for bottom)
-  const maxVal=Math.max(bruttoM,nettoM)||1;
+  const maxVal=Math.max(bruttoM,nachSteuer)||1;
 
   let h=`<div style="display:flex;flex-direction:column;gap:2px">`;
   steps.forEach((s,i)=>{
@@ -6514,7 +6522,7 @@ function childPerKid(){
   const kita=kitaCostMonthly(1,scenKitaTage());
   return {oth,kita,total:oth+kita};
 }
-function mkMetrics(hh,ausg){const payout=calcHouseholdPayout(hh);const ue=payout-ausg;return {hh,netto:payout,ausgaben:ausg,ueberschuss:ue,sq:payout>0?ue/payout*100:0}}
+function mkMetrics(hh,ausg){const payout=hh.nettoMonat;const ue=payout-ausg;return {hh,netto:payout,ausgaben:ausg,ueberschuss:ue,sq:payout>0?ue/payout*100:0}}
 function currentMetrics(){
   const ausg=getBudget().reduce((a,c)=>a+catBase(c),0)+currentKita();
   return mkMetrics(calcHousehold(),ausg);
@@ -7247,8 +7255,10 @@ function getActualIncome(month){
 }
 function getActualExpenseTotal(month,cats=getBudgetCats()){
   const a=actualBudget[month]||{};
-  return cats.reduce((sum,c)=>sum+(a[c.id]||0),0);
+  return cats.filter(c=>c.id!=='steuern').reduce((sum,c)=>sum+(a[c.id]||0),0);
 }
+function getActualTaxReserve(month){return (actualBudget[month]||{}).steuern||0;}
+
 function getActualSavingsSummary(year,cats=getBudgetCats()){
   const months=Array.from({length:12},(_,i)=>`${year}-${String(i+1).padStart(2,'0')}`);
   const tracked=months.filter(m=>{
@@ -7257,17 +7267,17 @@ function getActualSavingsSummary(year,cats=getBudgetCats()){
   });
   const actualIncome=tracked.reduce((s,m)=>s+getActualIncome(m),0);
   const actualExpenses=tracked.reduce((s,m)=>s+getActualExpenseTotal(m,cats),0);
-  const actualSavings=actualIncome-actualExpenses;
+  const actualTaxReserves=tracked.reduce((s,m)=>s+getActualTaxReserve(m),0);
+  const actualSavingsBeforeReserve=actualIncome-actualExpenses;
+  const actualSavings=actualSavingsBeforeReserve-actualTaxReserves;
   const hhPlan=calcHousehold();
-  // Vergleichsbasis wie beim Ist: ausbezahlte Löhne nach Sozialabgaben,
-  // aber vor Einkommenssteuer. Die Steuer wird als eigene Budgetposition
-  // (Steuerrücklagen) bei den Ausgaben berücksichtigt.
-  const plannedPayout=(hhPlan.p1.bruttoEff+hhPlan.p2.bruttoEff-hhPlan.p1.sozial-hhPlan.p2.sozial+hhPlan.kinderzulageJahr)/12;
-  const plannedExpenses=cats.reduce((s,c)=>s+c.plan,0);
-  const plannedSavings=plannedPayout-plannedExpenses;
+  const plannedNet=hhPlan.nettoMonat;
+  const plannedExpenses=cats.filter(c=>c.id!=='steuern').reduce((s,c)=>s+c.plan,0);
+  const plannedTax=(hhPlan.p1.steuer+hhPlan.p2.steuer)/12;
+  const plannedSavings=plannedNet-plannedExpenses;
   const forecastMonths=12-tracked.length;
   const estimateYear=actualSavings+forecastMonths*plannedSavings;
-  return {months,tracked,actualIncome,actualExpenses,actualSavings,plannedIncome:plannedPayout,plannedPayout,plannedExpenses,plannedSavings,forecastMonths,estimateYear,avgActualSavings:tracked.length?actualSavings/tracked.length:null};
+  return {months,tracked,actualIncome,actualExpenses,actualTaxReserves,actualSavingsBeforeReserve,actualSavings,plannedIncome:plannedNet,plannedNet,plannedTax,plannedExpenses,plannedSavings,forecastMonths,estimateYear,avgActualSavings:tracked.length?actualSavings/tracked.length:null};
 }
 
 function saveActualBudget(month, catId, val){
@@ -7437,7 +7447,9 @@ function renderBpIst(){
     const actualIncomeAvg=n?savings.actualIncome/n:null;
     const actualExpenseAvg=n?savings.actualExpenses/n:null;
     const actualSavingsAvg=n?savings.actualSavings/n:null;
-    const actualRate=n&&savings.actualIncome>0?savings.actualSavings/savings.actualIncome*100:null;
+    const actualTaxAvg=n?savings.actualTaxReserves/n:null;
+    const actualIncomeAfterReserve=n?(savings.actualIncome-savings.actualTaxReserves)/n:null;
+    const actualRate=n&&savings.actualIncome>savings.actualTaxReserves?savings.actualSavings/(savings.actualIncome-savings.actualTaxReserves)*100:null;
     const planRate=plannedIncome>0?savings.plannedSavings/plannedIncome*100:null;
     const row=(label,ist,plan,diff,kind='money')=>{
       const valid=ist!==null&&plan!==null;
@@ -7448,17 +7460,18 @@ function renderBpIst(){
       return `<tr><td style="padding:10px 12px;color:var(--tx);font-size:11.5px;font-weight:500">${label}</td><td class="blur-val" style="padding:10px 12px;text-align:right;font:500 11.5px var(--fm)">${show(ist)}</td><td style="padding:10px 12px;text-align:right;color:var(--tx2);font:11.5px var(--fm)">${show(plan)}</td><td class="blur-val" style="padding:10px 12px;text-align:right;color:${dc};font:600 11.5px var(--fm)">${deltaText}</td></tr>`;
     };
     return `<div style="border:1px solid var(--bdr);border-radius:11px;overflow:hidden;margin:12px 0 14px;background:var(--bg)">
-      <div style="padding:11px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:12px;font-weight:600;color:var(--tx)">Ausbezahlte Gehälter & Budget · pro Monat</div><div style="font-size:10px;color:var(--tx3)">${n} vollständig erfasste Monate · Ist = Durchschnitt</div></div>
+      <div style="padding:11px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:12px;font-weight:600;color:var(--tx)">Ist-Geldfluss und Plan · pro Monat</div><div style="font-size:10px;color:var(--tx3)">${n} vollständig erfasste Monate · Ist = Durchschnitt</div></div>
       <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr style="background:var(--bg2)"><th style="text-align:left;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Kennzahl</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--bl);text-transform:uppercase">Ist Ø</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Plan</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Abweichung</th></tr></thead><tbody>
-      ${row('Ausbezahlte Gehälter',actualIncomeAvg,plannedIncome,actualIncomeAvg===null?0:actualIncomeAvg-plannedIncome)}
-      ${row('Ausgaben',actualExpenseAvg,n?savings.plannedExpenses:null,actualExpenseAvg===null?0:actualExpenseAvg-savings.plannedExpenses,'expense')}
-      ${row('Gespart',actualSavingsAvg,savings.plannedSavings,actualSavingsAvg===null?0:actualSavingsAvg-savings.plannedSavings)}
-      ${row('Sparquote',actualRate,planRate,actualRate===null?0:actualRate-planRate,'rate')}
+      ${row('Einkommen nach Steuern / Rücklage',actualIncomeAfterReserve,plannedIncome,actualIncomeAfterReserve===null?0:actualIncomeAfterReserve-plannedIncome)}
+      ${row('Tatsächliche Ausgaben (ohne Rücklagen)',actualExpenseAvg,n?savings.plannedExpenses:null,actualExpenseAvg===null?0:actualExpenseAvg-savings.plannedExpenses,'expense')}
+      ${row('Steuerrücklagen (separat)',actualTaxAvg,n?savings.plannedTax:null,actualTaxAvg===null?0:actualTaxAvg-savings.plannedTax)}
+      ${row('Überschuss nach Rücklagen',actualSavingsAvg,savings.plannedSavings,actualSavingsAvg===null?0:actualSavingsAvg-savings.plannedSavings)}
+      ${row('Sparquote nach Rücklagen',actualRate,planRate,actualRate===null?0:actualRate-planRate,'rate')}
       </tbody></table></div>
-      <div style="padding:10px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Jahresprognose</div><div class="blur-val" style="font:600 17px var(--fm);color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div></div><div style="font-size:10px;color:var(--tx2);max-width:390px;line-height:1.5">${savings.tracked.length} Ist-Monate plus ${savings.forecastMonths} verbleibende Monate zum Plan-Sparbetrag (Plan-Auszahlung abzüglich Budgetausgaben inkl. Steuerrücklagen). Positive Abweichung ist bei Einkommen und Sparen gut, bei Ausgaben schlecht.</div></div>
+      <div style="padding:10px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Jahresprognose</div><div class="blur-val" style="font:600 17px var(--fm);color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div></div><div style="font-size:10px;color:var(--tx2);max-width:390px;line-height:1.5">${savings.tracked.length} Ist-Monate plus ${savings.forecastMonths} verbleibende Monate zum Plan-Sparbetrag (Nettoeinkommen nach Steuern minus Konsumausgaben). Steuerrücklagen werden im Ist separat ausgewiesen und vom Überschuss abgezogen, aber nicht als Konsumausgaben gezählt.</div></div>
     </div>`;
   })()}
-  <div style="font-size:10px;color:var(--tx3);margin:-3px 0 12px;line-height:1.5">Verglichen werden nur Monate mit erfasstem Einkommen und Ausgaben. Ist-Einkommen sind die tatsächlich ausbezahlten Gehälter. Die Plan-Auszahlung entspricht dem erwarteten Lohn nach AHV/ALV/BVG, aber vor Einkommenssteuer. Die Steuer wird separat über «Steuerrücklagen» als Budgetausgabe berücksichtigt.</div>
+  <div style="font-size:10px;color:var(--tx3);margin:-3px 0 12px;line-height:1.5">Verglichen werden Monate mit erfasstem Einkommen und Ausgaben. Im Ist werden tatsächliche Ausgaben ohne Steuerrücklagen gezeigt. Steuerrücklagen sind reserviertes Geld, keine Konsumausgaben; sie werden separat ausgewiesen und beim Überschuss abgezogen. Im Plan wird das geschätzte Haushaltsnettoeinkommen nach Sozialabgaben und effektiven Steuern mit den geplanten Konsumausgaben verglichen.</div>
 
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr);background:var(--bg)">
     <table style="border-collapse:collapse;width:100%;min-width:700px">
@@ -7506,7 +7519,7 @@ function renderBpIst(){
           const dc=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
           const rowBg=ci%2===0?'var(--bg)':'var(--bg3)';
           return `<tr style="background:${rowBg}">
-            <td style="padding:8px 13px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);font-size:11px;border-bottom:1px solid var(--bdr)">${escapeHTML(cat.label)}</td>
+            <td style="padding:8px 13px;color:var(--tx);position:sticky;left:0;background:${rowBg};z-index:1;font-family:var(--fb);font-size:11px;border-bottom:1px solid var(--bdr)">${cat.id==='steuern'?'🧾 Steuerrücklagen (separat)':escapeHTML(cat.label)}</td>
             ${yearMonths.map((m,mi)=>{
               const v=monthVals[mi];
               const isCur=m===bpIstMonth;
@@ -7527,11 +7540,11 @@ function renderBpIst(){
         ${(()=>{
           const tots=yearMonths.map(m=>{
             const has=cats.some(c=>actualBudget[m]?.[c.id]>0);
-            return has?cats.reduce((s,c)=>s+(actualBudget[m]?.[c.id]||0),0):null;
+            return has?cats.filter(c=>c.id!=='steuern').reduce((s,c)=>s+(actualBudget[m]?.[c.id]||0),0):null;
           });
           const rec=tots.filter(v=>v!==null);
           const avg=rec.length>0?rec.reduce((s,v)=>s+v,0)/rec.length:null;
-          const planT=cats.reduce((s,c)=>s+c.plan,0);
+          const planT=cats.filter(c=>c.id!=='steuern').reduce((s,c)=>s+c.plan,0);
           const delta=avg!==null?avg-planT:null;
           const dc=delta===null?'var(--tx3)':delta<=0?'var(--gr)':'var(--rd)';
           return `<tr style="background:var(--bg3)">
@@ -7551,16 +7564,21 @@ function renderBpIst(){
             <td style="text-align:right;padding:10px 8px;font-family:var(--fm);font-size:11px;color:${dc};border-left:1px solid var(--bdr);border-top:2px solid var(--bdr2)" class="blur-val">${delta!==null?(delta*12>=0?'+':'')+fmtN(Math.round(delta*12)):'—'}</td>
           </tr>`;
         })()}
-        <!-- MONTHLY SAVINGS: income less actual expenses -->
-        <tr style="background:rgba(74,222,128,0.055);border-top:2px solid var(--bdr2)">
-          <td style="padding:10px 13px;color:var(--gr);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:700;font-size:11.5px">Effektiv gespart</td>
-          ${yearMonths.map((m,mi)=>{const ex=recMs.includes(m)?getActualExpenseTotal(m,cats):null;const inc=getEinkommen(m);const sv=ex!==null&&inc>0?inc-ex:null;return `<td style="text-align:right;padding:10px 5px;font-family:var(--fm);font-size:11px;font-weight:600;color:${sv===null?'var(--tx3)':sv>=0?'var(--gr)':'var(--rd)'};border-left:1px solid var(--bdr)" class="blur-val">${sv===null?'—':fmtN(sv)}</td>`}).join('')}
+        <!-- MONTHLY CASH SURPLUS BEFORE TAX RESERVES -->
+        <tr style="background:rgba(96,165,250,0.04);border-top:2px solid var(--bdr2)">
+          <td style="padding:9px 13px;color:var(--tx2);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11px">Überschuss vor Steuerrücklagen</td>
+          ${yearMonths.map((m,mi)=>{const ex=recMs.includes(m)?getActualExpenseTotal(m,cats):null;const inc=getEinkommen(m);const sv=ex!==null&&inc>0?inc-ex:null;return `<td style="text-align:right;padding:9px 5px;font-family:var(--fm);font-size:11px;font-weight:500;color:${sv===null?'var(--tx3)':sv>=0?'var(--tx)':'var(--rd)'};border-left:1px solid var(--bdr)" class="blur-val">${sv===null?'—':fmtN(sv)}</td>`}).join('')}
+          <td colspan="4" style="padding:9px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Einkommen minus tatsächliche Konsumausgaben</td>
+        </tr>
+        <tr style="background:rgba(74,222,128,0.055)">
+          <td style="padding:10px 13px;color:var(--gr);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:700;font-size:11.5px">Verfügbar nach Steuerrücklagen</td>
+          ${yearMonths.map((m,mi)=>{const ex=recMs.includes(m)?getActualExpenseTotal(m,cats):null;const inc=getEinkommen(m);const reserve=getActualTaxReserve(m);const sv=ex!==null&&inc>0?inc-ex-reserve:null;return `<td style="text-align:right;padding:10px 5px;font-family:var(--fm);font-size:11px;font-weight:600;color:${sv===null?'var(--tx3)':sv>=0?'var(--gr)':'var(--rd)'};border-left:1px solid var(--bdr)" class="blur-val">${sv===null?'—':fmtN(sv)}</td>`}).join('')}
           <td colspan="4" style="padding:10px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Summe erfasste Monate: <strong class="blur-val" style="color:var(--gr)">${fmtN(savings.actualSavings)}</strong></td>
         </tr>
         <tr style="background:rgba(96,165,250,0.045)">
-          <td style="padding:9px 13px;color:var(--bl);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11px">Plan-Auszahlung − Ist-Ausgaben</td>
+          <td style="padding:9px 13px;color:var(--bl);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11px">Plan-Netto − Ist-Konsumausgaben (ohne Rücklagen)</td>
           ${yearMonths.map((m,mi)=>{const ex=recMs.includes(m)?getActualExpenseTotal(m,cats):null;const sv=ex!==null?plannedIncome-ex:null;return `<td style="text-align:right;padding:9px 5px;font-family:var(--fm);font-size:11px;font-weight:500;color:${sv===null?'var(--tx3)':sv>=0?'var(--bl)':'var(--rd)'};border-left:1px solid var(--bdr)" class="blur-val">${sv===null?'—':fmtN(sv)}</td>`}).join('')}
-          <td colspan="4" style="padding:9px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Plan-Auszahlung: <strong class="blur-val" style="color:var(--bl)">${fmtN(plannedIncome)}/Mt</strong></td>
+          <td colspan="4" style="padding:9px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Plan-Netto: <strong class="blur-val" style="color:var(--bl)">${fmtN(plannedIncome)}/Mt</strong></td>
         </tr>
       </tbody>
     </table>
@@ -7676,7 +7694,7 @@ function calcFirePersonalShare(personNet, partnerNet, allowanceShare=0){
 
 function getFireDefaults(personFilter){
   const hh=calcHousehold();
-  const bt=budgetTotals();
+  const bt=budgetTotalsWithoutTaxReserve();
   const kita=calcKitaKosten();
   const kitaInBudget=getBudget().find(c=>c.id==='kind')?.items.some(i=>i.id==='kita'&&budgetItemAmt(i)>0);
   const ausgabenGesamt=bt.total+(kitaInBudget?0:kita.monat);
@@ -8768,7 +8786,7 @@ function renderBaristaFire(){
 
 function openApplyProjection(){
   const hh=calcHousehold();
-  const bt=budgetTotals();
+  const bt=budgetTotalsWithoutTaxReserve();
   const kita=calcKitaKosten();
   const kitaItem = getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita');
   const kitaInBudgetAmt = kitaItem?budgetItemAmt(kitaItem):0;
@@ -8790,7 +8808,7 @@ function selectApplyOpt(opt){
 }
 async function confirmApplyProjection(){
   const hh=calcHousehold();
-  const bt=budgetTotals();
+  const bt=budgetTotalsWithoutTaxReserve();
   const kita=calcKitaKosten();
   const kitaItem = getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita');
   const kitaInBudgetAmt = kitaItem?budgetItemAmt(kitaItem):0;
@@ -8807,7 +8825,7 @@ async function confirmApplyProjection(){
 
 async function applyToRente(){
   const hh=calcHousehold();
-  const bt=budgetTotals();
+  const bt=budgetTotalsWithoutTaxReserve();
   const kita=calcKitaKosten();
   const kitaItem = getBudget().find(c=>c.id==='kind')?.items.find(i=>i.id==='kita');
   const kitaInBudgetAmt = kitaItem?budgetItemAmt(kitaItem):0;
