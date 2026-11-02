@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='55.0.0';
+const APP_VERSION='56.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -4508,7 +4508,8 @@ function renderDash(){
     metricsH=`<div class="mr mc4"><div class="mc hero"><div class="mc-l">Gesamtvermögen (ohne PK)</div><div class="mc-v blur-val">${fmt(t.gesamt)}</div>${delta!==null?`<div class="mc-d ${delta>=0?'pos':'neg'} blur-val">${delta>=0?'+':''}${fmt(delta)} · ${dPct}%</div>`:'<div class="mc-s mut">Erster Eintrag</div>'}</div>
       <div class="mc"><div class="mc-l">${n1()}</div><div class="mc-v blur-val" style="color:var(--bl)">${fmt(tI.gesamt)}</div><div class="mc-s mut blur-val">${fmt(e.ein_i)} · ${fmt(e.inv_i)} inv.</div></div>
       <div class="mc"><div class="mc-l">${n2()}</div><div class="mc-v blur-val" style="color:var(--vi)">${fmt(tP.gesamt)}</div><div class="mc-s mut blur-val">${fmt(e.ein_p)} · ${fmt(e.inv_p)} inv.</div></div>
-      <div class="mc"><div class="mc-l">Investiert</div><div class="mc-v blur-val">${fmt(e.investiert)}</div><div class="mc-s mut blur-val">${fmt(e.einkommen)} Einkommen</div></div></div>`;
+      <div class="mc"><div class="mc-l">Investiert</div><div class="mc-v blur-val">${fmt(e.investiert)}</div><div class="mc-s mut blur-val">${fmt(e.einkommen)} Einkommen</div></div>
+      ${settings.kinderEnabled?(()=>{const ck=personT(month,'kinder');const cp=mi>0?personT(ms[mi-1],'kinder'):null;const cv=ck.gesamt;const cd=cp?cv-cp.gesamt:null;return `<div class="mc" style="border-color:rgba(251,191,36,.22)"><div class="mc-l">Kindervermögen · separat</div><div class="mc-v blur-val" style="color:var(--am)">${fmt(cv)}</div><div class="mc-s mut">${cd===null?'Erster Eintrag':`Veränderung ${cd>=0?'+':''}${fmt(cd)}`} · nicht im Haushaltstotal</div></div>`})():''}</div>`;
   }else{
     // p1/p2: only show the person total — Cash/Anlagen/3a/PK shown below in cat-cards
     const pName=currentView==='p1'?n1():n2();
@@ -5655,6 +5656,16 @@ function getBudget(){
     if(it.amt_p1===undefined)it.amt_p1=0;
     if(it.amt_p2===undefined)it.amt_p2=0;
   }));
+  // New standard category: tax reserves. Append to existing budgets without
+  // changing any previously entered amounts or overwriting user categories.
+  if(!budget.some(c=>c.id==='steuern')){
+    budget.push({id:'steuern',label:'Steuerrücklagen',icon:'🧾',items:[
+      {id:'steuerruecklagen',label:'Steuerrücklagen',type:'fix',amt:0,amt_p1:0,amt_p2:0}
+    ]});
+  }else{
+    const taxCat=budget.find(c=>c.id==='steuern');
+    if(!taxCat.items.some(i=>i.id==='steuerruecklagen'))taxCat.items.push({id:'steuerruecklagen',label:'Steuerrücklagen',type:'fix',amt:0,amt_p1:0,amt_p2:0});
+  }
   return budget;
 }
 
@@ -7410,20 +7421,33 @@ function renderBpIst(){
     </div>
   </div>
 
-  <div class="mr mc4" style="margin:12px 0 14px">
-    <div class="mc"><div class="mc-l">Ist-Einkommen</div><div class="mc-v blur-val">${fmt(savings.actualIncome)}</div><div class="mc-s mut">${savings.tracked.length} vollständig erfasste Monate</div></div>
-    <div class="mc"><div class="mc-l">Ist-Ausgaben</div><div class="mc-v blur-val">${fmt(savings.actualExpenses)}</div><div class="mc-s mut">gleiche Monate wie Einkommen</div></div>
-    <div class="mc hero"><div class="mc-l">Effektiv gespart</div><div class="mc-v blur-val">${fmt(savings.actualSavings)}</div><div class="mc-s mut">Sparquote ${savings.actualIncome>0?(savings.actualSavings/savings.actualIncome*100).toFixed(1)+'%':'—'}</div></div>
-    <div class="mc"><div class="mc-l">Ø Sparbetrag / Monat</div><div class="mc-v blur-val">${savings.avgActualSavings===null?'—':fmt(savings.avgActualSavings)}</div><div class="mc-s mut">nur vollständig erfasste Monate</div></div>
-    <div class="mc"><div class="mc-l">Plan-Sparbetrag / Monat</div><div class="mc-v blur-val">${fmt(savings.plannedSavings)}</div><div class="mc-s mut">Plan-Nettoeinkommen minus Plan-Ausgaben</div></div>
-    <div class="mc"><div class="mc-l">Jahres-Schätzung</div><div class="mc-v blur-val" style="color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div><div class="mc-s mut">Ist-Monate + ${savings.forecastMonths} × Plan-Sparbetrag</div></div>
-  </div>
-  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px">
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Plan-Nettoeinkommen</div><div class="blur-val" style="font:500 13px var(--fm);margin-top:4px">${fmt(plannedIncome)}</div></div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Ø Ist-Ausgaben</div><div class="blur-val" style="font:500 13px var(--fm);margin-top:4px">${avgIst===null?'—':fmt(avgIst)}</div></div>
-    <div style="background:var(--bg3);border-radius:9px;padding:10px 12px"><div style="font-size:9px;color:var(--tx3);text-transform:uppercase">Planincome minus Ø Ist-Ausgaben</div><div class="blur-val" style="font:600 13px var(--fm);margin-top:4px;color:${avgIst===null?'var(--tx3)':plannedIncome-avgIst>=0?'var(--gr)':'var(--rd)'}">${avgIst===null?'—':fmt(plannedIncome-avgIst)}</div></div>
-  </div>
-  <div style="font-size:10px;color:var(--tx3);margin:-5px 0 12px;line-height:1.5">Jahres-Schätzung: Summe der Sparbeträge aus Monaten mit erfasstem Einkommen UND Ausgaben plus Plan-Sparbetrag für die übrigen Monate. In der Tabelle bedeutet Δ/Mt: Ø Ist-Ausgaben minus Plan; ein positiver Wert heisst Mehr-Ausgaben als geplant.</div>
+  ${(()=>{
+    const n=savings.tracked.length;
+    const actualIncomeAvg=n?savings.actualIncome/n:null;
+    const actualExpenseAvg=n?savings.actualExpenses/n:null;
+    const actualSavingsAvg=n?savings.actualSavings/n:null;
+    const actualRate=n&&savings.actualIncome>0?savings.actualSavings/savings.actualIncome*100:null;
+    const planRate=plannedIncome>0?savings.plannedSavings/plannedIncome*100:null;
+    const row=(label,ist,plan,diff,kind='money')=>{
+      const valid=ist!==null&&plan!==null;
+      const good=kind==='expense'?-diff:diff;
+      const deltaText=!valid?'—':kind==='rate'?`${diff>=0?'+':''}${diff.toFixed(1)} PP`: `${diff>=0?'+':''}${fmt(Math.round(diff))}`;
+      const dc=!valid?'var(--tx3)':good>=0?'var(--gr)':'var(--rd)';
+      const show=v=>v===null?'—':kind==='rate'?`${v.toFixed(1)}%`:fmt(Math.round(v));
+      return `<tr><td style="padding:10px 12px;color:var(--tx);font-size:11.5px;font-weight:500">${label}</td><td class="blur-val" style="padding:10px 12px;text-align:right;font:500 11.5px var(--fm)">${show(ist)}</td><td style="padding:10px 12px;text-align:right;color:var(--tx2);font:11.5px var(--fm)">${show(plan)}</td><td class="blur-val" style="padding:10px 12px;text-align:right;color:${dc};font:600 11.5px var(--fm)">${deltaText}</td></tr>`;
+    };
+    return `<div style="border:1px solid var(--bdr);border-radius:11px;overflow:hidden;margin:12px 0 14px;background:var(--bg)">
+      <div style="padding:11px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:12px;font-weight:600;color:var(--tx)">Ist vs. Plan · pro Monat</div><div style="font-size:10px;color:var(--tx3)">${n} vollständig erfasste Monate · Ist = Durchschnitt</div></div>
+      <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr style="background:var(--bg2)"><th style="text-align:left;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Kennzahl</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--bl);text-transform:uppercase">Ist Ø</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Plan</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Abweichung</th></tr></thead><tbody>
+      ${row('Nettoeinkommen',actualIncomeAvg,plannedIncome,actualIncomeAvg===null?0:actualIncomeAvg-plannedIncome)}
+      ${row('Ausgaben',actualExpenseAvg,n?savings.plannedExpenses:null,actualExpenseAvg===null?0:actualExpenseAvg-savings.plannedExpenses,'expense')}
+      ${row('Gespart',actualSavingsAvg,savings.plannedSavings,actualSavingsAvg===null?0:actualSavingsAvg-savings.plannedSavings)}
+      ${row('Sparquote',actualRate,planRate,actualRate===null?0:actualRate-planRate,'rate')}
+      </tbody></table></div>
+      <div style="padding:10px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Jahresprognose</div><div class="blur-val" style="font:600 17px var(--fm);color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div></div><div style="font-size:10px;color:var(--tx2);max-width:390px;line-height:1.5">${savings.tracked.length} Ist-Monate plus ${savings.forecastMonths} verbleibende Monate zum Plan-Sparbetrag. Positive Abweichung ist bei Einkommen und Sparen gut, bei Ausgaben schlecht.</div></div>
+    </div>`;
+  })()}
+  <div style="font-size:10px;color:var(--tx3);margin:-3px 0 12px;line-height:1.5">Verglichen werden nur Monate mit erfasstem Einkommen und Ausgaben. Der Ist-Wert ist der Monatsdurchschnitt dieser vollständigen Monate; Plan-Werte sind Monatswerte.</div>
 
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr);background:var(--bg)">
     <table style="border-collapse:collapse;width:100%;min-width:700px">
