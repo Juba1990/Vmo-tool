@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='57.0.0';
+const APP_VERSION='58.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -1449,7 +1449,7 @@ body.light-theme .modal{box-shadow:0 20px 60px rgba(0,0,0,0.15)}
     <!-- BUDGETPLAN (Analyse) -->
     <div class="page" id="page-budgetplan">
       <div class="ph">
-        <div><div class="pt">Budgetplan</div><div class="ps" id="bp-sub">Einkommen &amp; Ausgaben Übersicht</div></div>
+        <div><div class="pt">Budgetplan</div><div class="ps" id="bp-sub">Ausbezahlte Gehälter nach Sozialabgaben · Steuern separat als Budgetausgabe</div></div>
       </div>
       <!-- Tab bar -->
       <div style="display:flex;gap:3px;background:var(--bg3);padding:4px;border-radius:10px;margin:0 16px 16px">
@@ -5954,6 +5954,11 @@ function calcHouseholdScenario(pen1,pen2,kinder){
   return {p1,p2,kinderzulageJahr,bruttoJahrTotal,nettoJahrTotal,nettoMonat:nettoJahrTotal/12};
 }
 function calcHousehold(){return calcHouseholdScenario(income.p1.pensum,income.p2.pensum,income.kinder)}
+// Budgetplan arbeitet mit effektiv verfügbarem Lohneingang: nach Sozialabgaben, vor Einkommenssteuer.
+// Die Steuer wird als eigene Budgetposition «Steuerrücklagen» abgezogen.
+function calcHouseholdPayout(hh=calcHousehold()){
+  return (hh.p1.bruttoEff-hh.p1.sozial+hh.p2.bruttoEff-hh.p2.sozial+hh.kinderzulageJahr)/12;
+}
 
 function calcKitaKosten(){
   // Grober Vollzahler-Preis: 120 CHF / Tag / Kind * 52 Wochen * Tage
@@ -6005,9 +6010,10 @@ function renderBpPlan(){
   const kitaInBudget = kitaInBudgetAmt>0;
   const kitaExtra = kitaInBudget ? 0 : kita.monat;
   const ausgabenMonat = bt.total + kitaExtra;
-  const ueberschussMonat = hh.nettoMonat - ausgabenMonat;
+  const auszahlungsEinkommen = calcHouseholdPayout(hh);
+  const ueberschussMonat = auszahlungsEinkommen - ausgabenMonat;
   const ueberschussJahr = ueberschussMonat * 12;
-  const sparQuote = hh.nettoMonat>0 ? (ueberschussMonat/hh.nettoMonat*100) : 0;
+  const sparQuote = auszahlungsEinkommen>0 ? (ueberschussMonat/auszahlungsEinkommen*100) : 0;
 
   // Miete / Netto-Ratio
   const mieteAmt = (()=>{
@@ -6017,8 +6023,8 @@ function renderBpPlan(){
     const n=w.items.find(i=>i.id==='strom_heiz');
     return (m?budgetItemAmt(m):0) + (n?budgetItemAmt(n):0);
   })();
-  const mietePctOfNetto = hh.nettoMonat>0?(mieteAmt/hh.nettoMonat*100):0;
-  const fixPctOfNetto = hh.nettoMonat>0?(bt.fix/hh.nettoMonat*100):0;
+  const mietePctOfNetto = auszahlungsEinkommen>0?(mieteAmt/auszahlungsEinkommen*100):0;
+  const fixPctOfNetto = auszahlungsEinkommen>0?(bt.fix/auszahlungsEinkommen*100):0;
 
   const avgSteuerPct = ((hh.p1.steuerPct+hh.p2.steuerPct)/2*100);
 
@@ -6026,16 +6032,16 @@ function renderBpPlan(){
   <!-- HERO: 3 big metrics -->
   <div class="bp-hero">
     <div class="bp-hero-card primary">
-      <div class="bp-hero-label">Haushalt Netto</div>
-      <div class="bp-hero-value blur-val">${fmt(hh.nettoMonat)}</div>
-      <div class="bp-hero-sub">pro Monat · ${fmt(hh.nettoJahrTotal)} / Jahr</div>
+      <div class="bp-hero-label">Ausbezahltes Einkommen</div>
+      <div class="bp-hero-value blur-val">${fmt(auszahlungsEinkommen)}</div>
+      <div class="bp-hero-sub">pro Monat · ${fmt(auszahlungsEinkommen*12)} / Jahr · vor Einkommenssteuer</div>
       <div class="bp-hero-mini">
         <span class="bp-hero-mini-lbl">${n1()}</span>
-        <span class="bp-hero-mini-val blur-val" style="color:var(--bl)">${fmt(hh.p1.netto/12)}</span>
+        <span class="bp-hero-mini-val blur-val" style="color:var(--bl)">${fmt((hh.p1.bruttoEff-hh.p1.sozial)/12)}</span>
       </div>
       <div class="bp-hero-mini">
         <span class="bp-hero-mini-lbl">${n2()}</span>
-        <span class="bp-hero-mini-val blur-val" style="color:var(--vi)">${fmt(hh.p2.netto/12)}</span>
+        <span class="bp-hero-mini-val blur-val" style="color:var(--vi)">${fmt((hh.p2.bruttoEff-hh.p2.sozial)/12)}</span>
       </div>
       <div class="bp-hero-mini">
         <span class="bp-hero-mini-lbl">Kinderzulage</span>
@@ -6246,11 +6252,11 @@ function renderBpPlan(){
     <div class="bp-section-hd">
       <div>
         <div class="bp-section-title">Budget-Aufteilung</div>
-        <div class="bp-section-sub">Fix · Variabel · Sparen als Anteil des Netto-Einkommens</div>
+        <div class="bp-section-sub">Fix · Variabel · Sparen als Anteil des ausbezahlten Einkommens</div>
       </div>
     </div>
     ${(()=>{
-      const tot=hh.nettoMonat||1;
+      const tot=auszahlungsEinkommen||1;
       const fixPct=Math.max(0,bt.fix/tot*100);
       const varPct=Math.max(0,(bt.var+kitaExtra)/tot*100);
       const savPct=Math.max(0,ueberschussMonat/tot*100);
@@ -6303,7 +6309,7 @@ function renderBpPlan(){
   </div>`;
 
   body.innerHTML=h;
-  document.getElementById('bp-sub').textContent=`Netto ${fmt(hh.nettoMonat)}/M · Ausgaben ${fmt(ausgabenMonat)}/M · ${ueberschussMonat>=0?'+':''}${fmt(ueberschussMonat)}/M`;
+  document.getElementById('bp-sub').textContent=`Auszahlung ${fmt(auszahlungsEinkommen)}/M · Ausgaben ${fmt(ausgabenMonat)}/M · ${ueberschussMonat>=0?'+':''}${fmt(ueberschussMonat)}/M`;
 
   renderBpAnalysis();
   // Render donut chart
@@ -6368,22 +6374,22 @@ function renderWaterfall(hh, bt, kitaExtra, ueberschuss){
   if(!cont)return;
   const bruttoM = hh.bruttoJahrTotal/12;
   const sozialM = (hh.p1.sozial+hh.p2.sozial)/12;
-  const steuerM = (hh.p1.steuer+hh.p2.steuer)/12;
   const zulageM = hh.kinderzulageJahr/12;
-  const nettoM = hh.nettoMonat;
-  const fix = bt.fix, vari = bt.var;
+  const nettoM = calcHouseholdPayout(hh);
+  const steuerReserve=(getBudget().find(c=>c.id==='steuern')?.items||[]).reduce((a,i)=>a+budgetItemAmt(i),0);
+  const fix = Math.max(0,bt.fix-steuerReserve), vari = bt.var;
 
-  // Running total list: each step shows label, delta, cumulative
+  // Running total list: Steuerrücklagen explizit ausweisen, damit Steuer nicht doppelt erscheint.
   const steps=[
     {lbl:'Brutto-Einkommen',delta:bruttoM,cum:bruttoM,type:'start',icon:'💼'},
     {lbl:'Sozialabgaben (AHV, ALV, BVG)',delta:-sozialM,cum:bruttoM-sozialM,type:'neg',icon:'−'},
-    {lbl:'Einkommenssteuer (BS)',delta:-steuerM,cum:bruttoM-sozialM-steuerM,type:'neg',icon:'−'},
     {lbl:'Kinderzulage',delta:zulageM,cum:nettoM,type:'pos',icon:'+'},
-    {lbl:'Netto-Einkommen',delta:nettoM,cum:nettoM,type:'total',icon:'🏦'},
-    {lbl:'Fixkosten',delta:-fix,cum:nettoM-fix,type:'neg',icon:'−'},
+    {lbl:'Ausbezahltes Einkommen (vor Steuer)',delta:nettoM,cum:nettoM,type:'total',icon:'🏦'},
+    {lbl:'Fixkosten (ohne Steuern)',delta:-fix,cum:nettoM-fix,type:'neg',icon:'−'},
     {lbl:'Variable Kosten',delta:-vari,cum:nettoM-fix-vari,type:'neg',icon:'−'}
   ];
-  if(kitaExtra>0)steps.push({lbl:'Kita-Kosten (zusätzlich)',delta:-kitaExtra,cum:nettoM-fix-vari-kitaExtra,type:'neg',icon:'−'});
+  if(steuerReserve>0)steps.push({lbl:'Steuerrücklagen',delta:-steuerReserve,cum:nettoM-fix-vari-steuerReserve,type:'neg',icon:'🧾'});
+  if(kitaExtra>0)steps.push({lbl:'Kita-Kosten (zusätzlich)',delta:-kitaExtra,cum:nettoM-fix-vari-steuerReserve-kitaExtra,type:'neg',icon:'−'});
   steps.push({lbl:ueberschuss>=0?'Überschuss / Sparrate':'Defizit',delta:ueberschuss,cum:ueberschuss,type:ueberschuss>=0?'final-pos':'final-neg',icon:ueberschuss>=0?'✓':'⚠'});
 
   // Determine max for bar scaling (use brutto for top, netto for bottom)
@@ -6508,7 +6514,7 @@ function childPerKid(){
   const kita=kitaCostMonthly(1,scenKitaTage());
   return {oth,kita,total:oth+kita};
 }
-function mkMetrics(hh,ausg){const ue=hh.nettoMonat-ausg;return {hh,netto:hh.nettoMonat,ausgaben:ausg,ueberschuss:ue,sq:hh.nettoMonat>0?ue/hh.nettoMonat*100:0}}
+function mkMetrics(hh,ausg){const payout=calcHouseholdPayout(hh);const ue=payout-ausg;return {hh,netto:payout,ausgaben:ausg,ueberschuss:ue,sq:payout>0?ue/payout*100:0}}
 function currentMetrics(){
   const ausg=getBudget().reduce((a,c)=>a+catBase(c),0)+currentKita();
   return mkMetrics(calcHousehold(),ausg);
@@ -6681,7 +6687,7 @@ function scStaticRow(label,cur,scen,note){
 function scSummaryHTML(){
   const c=currentMetrics(),s=scenarioMetrics();
   const rows=[
-    ['Netto-Einkommen / Mt',c.netto,s.netto,'money',true],
+    ['Ausbezahltes Einkommen / Mt',c.netto,s.netto,'money',true],
     ['Ausgaben / Mt',c.ausgaben,s.ausgaben,'money',false],
     ['Überschuss / Mt',c.ueberschuss,s.ueberschuss,'money',true],
     ['Sparquote',c.sq,s.sq,'pct',true]
@@ -6804,7 +6810,7 @@ function pensumMatrix(bt,kitaExtra){
   for(let p1=100;p1>=0;p1-=10){
     h+=`<div class="bp-mx-header" style="text-align:right">${p1}%</div>`;
     for(let p2=0;p2<=100;p2+=10){
-      const uebr=calcHouseholdScenario(p1,p2,income.kinder).nettoMonat-ausg;
+      const uebr=calcHouseholdPayout(calcHouseholdScenario(p1,p2,income.kinder))-ausg;
       let cls='';if(uebr>=1500)cls='ok-strong';else if(uebr>=0)cls='ok';
       if(p1===income.p1.pensum&&p2===income.p2.pensum)cls+=' current';
       const disp=uebr>=0?(uebr>=1000?'+'+(uebr/1000).toFixed(1)+'k':'+'+Math.round(uebr)):(Math.abs(uebr)>=1000?'−'+(Math.abs(uebr)/1000).toFixed(1)+'k':'−'+Math.round(Math.abs(uebr)));
@@ -6897,8 +6903,9 @@ function renderBpAnalysis(){
     const hh=who===1?calcHouseholdScenario(0,scenPens2(),income.kinder+(act?scenario.extraKinder:0)):calcHouseholdScenario(scenPens1(),0,income.kinder+(act?scenario.extraKinder:0));
     const hhBase=who===1?calcHouseholdScenario(0,income.p2.pensum,income.kinder):calcHouseholdScenario(income.p1.pensum,0,income.kinder);
     const aus=act?s.ausgaben:c.ausgaben;
-    const ue=(act?hh.nettoMonat:hhBase.nettoMonat)-aus;
-    return {netto:act?hh.nettoMonat:hhBase.nettoMonat,ue,reach:ue<0?cash/Math.abs(ue):Infinity};
+    const payout=calcHouseholdPayout(act?hh:hhBase);
+    const ue=payout-aus;
+    return {netto:payout,ue,reach:ue<0?cash/Math.abs(ue):Infinity};
   };
   const l1=loss(1),l2=loss(2);
 
