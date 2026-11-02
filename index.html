@@ -14,7 +14,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
-const APP_VERSION='56.0.0';
+const APP_VERSION='57.0.0';
 // Register Service Worker for PWA — with update detection
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
@@ -7251,12 +7251,16 @@ function getActualSavingsSummary(year,cats=getBudgetCats()){
   const actualIncome=tracked.reduce((s,m)=>s+getActualIncome(m),0);
   const actualExpenses=tracked.reduce((s,m)=>s+getActualExpenseTotal(m,cats),0);
   const actualSavings=actualIncome-actualExpenses;
-  const plannedIncome=calcHousehold().nettoMonat;
+  const hhPlan=calcHousehold();
+  // Vergleichsbasis wie beim Ist: ausbezahlte Löhne nach Sozialabgaben,
+  // aber vor Einkommenssteuer. Die Steuer wird als eigene Budgetposition
+  // (Steuerrücklagen) bei den Ausgaben berücksichtigt.
+  const plannedPayout=(hhPlan.p1.bruttoEff+hhPlan.p2.bruttoEff-hhPlan.p1.sozial-hhPlan.p2.sozial+hhPlan.kinderzulageJahr)/12;
   const plannedExpenses=cats.reduce((s,c)=>s+c.plan,0);
-  const plannedSavings=plannedIncome-plannedExpenses;
+  const plannedSavings=plannedPayout-plannedExpenses;
   const forecastMonths=12-tracked.length;
   const estimateYear=actualSavings+forecastMonths*plannedSavings;
-  return {months,tracked,actualIncome,actualExpenses,actualSavings,plannedIncome,plannedExpenses,plannedSavings,forecastMonths,estimateYear,avgActualSavings:tracked.length?actualSavings/tracked.length:null};
+  return {months,tracked,actualIncome,actualExpenses,actualSavings,plannedIncome:plannedPayout,plannedPayout,plannedExpenses,plannedSavings,forecastMonths,estimateYear,avgActualSavings:tracked.length?actualSavings/tracked.length:null};
 }
 
 function saveActualBudget(month, catId, val){
@@ -7437,17 +7441,17 @@ function renderBpIst(){
       return `<tr><td style="padding:10px 12px;color:var(--tx);font-size:11.5px;font-weight:500">${label}</td><td class="blur-val" style="padding:10px 12px;text-align:right;font:500 11.5px var(--fm)">${show(ist)}</td><td style="padding:10px 12px;text-align:right;color:var(--tx2);font:11.5px var(--fm)">${show(plan)}</td><td class="blur-val" style="padding:10px 12px;text-align:right;color:${dc};font:600 11.5px var(--fm)">${deltaText}</td></tr>`;
     };
     return `<div style="border:1px solid var(--bdr);border-radius:11px;overflow:hidden;margin:12px 0 14px;background:var(--bg)">
-      <div style="padding:11px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:12px;font-weight:600;color:var(--tx)">Ist vs. Plan · pro Monat</div><div style="font-size:10px;color:var(--tx3)">${n} vollständig erfasste Monate · Ist = Durchschnitt</div></div>
+      <div style="padding:11px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:12px;font-weight:600;color:var(--tx)">Ausbezahlte Gehälter & Budget · pro Monat</div><div style="font-size:10px;color:var(--tx3)">${n} vollständig erfasste Monate · Ist = Durchschnitt</div></div>
       <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr style="background:var(--bg2)"><th style="text-align:left;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Kennzahl</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--bl);text-transform:uppercase">Ist Ø</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Plan</th><th style="text-align:right;padding:8px 12px;font-size:9px;color:var(--tx3);text-transform:uppercase">Abweichung</th></tr></thead><tbody>
-      ${row('Nettoeinkommen',actualIncomeAvg,plannedIncome,actualIncomeAvg===null?0:actualIncomeAvg-plannedIncome)}
+      ${row('Ausbezahlte Gehälter',actualIncomeAvg,plannedIncome,actualIncomeAvg===null?0:actualIncomeAvg-plannedIncome)}
       ${row('Ausgaben',actualExpenseAvg,n?savings.plannedExpenses:null,actualExpenseAvg===null?0:actualExpenseAvg-savings.plannedExpenses,'expense')}
       ${row('Gespart',actualSavingsAvg,savings.plannedSavings,actualSavingsAvg===null?0:actualSavingsAvg-savings.plannedSavings)}
       ${row('Sparquote',actualRate,planRate,actualRate===null?0:actualRate-planRate,'rate')}
       </tbody></table></div>
-      <div style="padding:10px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Jahresprognose</div><div class="blur-val" style="font:600 17px var(--fm);color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div></div><div style="font-size:10px;color:var(--tx2);max-width:390px;line-height:1.5">${savings.tracked.length} Ist-Monate plus ${savings.forecastMonths} verbleibende Monate zum Plan-Sparbetrag. Positive Abweichung ist bei Einkommen und Sparen gut, bei Ausgaben schlecht.</div></div>
+      <div style="padding:10px 13px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div style="font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Jahresprognose</div><div class="blur-val" style="font:600 17px var(--fm);color:${savings.estimateYear>=0?'var(--gr)':'var(--rd)'}">${fmt(savings.estimateYear)}</div></div><div style="font-size:10px;color:var(--tx2);max-width:390px;line-height:1.5">${savings.tracked.length} Ist-Monate plus ${savings.forecastMonths} verbleibende Monate zum Plan-Sparbetrag (Plan-Auszahlung abzüglich Budgetausgaben inkl. Steuerrücklagen). Positive Abweichung ist bei Einkommen und Sparen gut, bei Ausgaben schlecht.</div></div>
     </div>`;
   })()}
-  <div style="font-size:10px;color:var(--tx3);margin:-3px 0 12px;line-height:1.5">Verglichen werden nur Monate mit erfasstem Einkommen und Ausgaben. Der Ist-Wert ist der Monatsdurchschnitt dieser vollständigen Monate; Plan-Werte sind Monatswerte.</div>
+  <div style="font-size:10px;color:var(--tx3);margin:-3px 0 12px;line-height:1.5">Verglichen werden nur Monate mit erfasstem Einkommen und Ausgaben. Ist-Einkommen sind die tatsächlich ausbezahlten Gehälter. Die Plan-Auszahlung entspricht dem erwarteten Lohn nach AHV/ALV/BVG, aber vor Einkommenssteuer. Die Steuer wird separat über «Steuerrücklagen» als Budgetausgabe berücksichtigt.</div>
 
   <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:11px;border:1px solid var(--bdr);background:var(--bg)">
     <table style="border-collapse:collapse;width:100%;min-width:700px">
@@ -7547,9 +7551,9 @@ function renderBpIst(){
           <td colspan="4" style="padding:10px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Summe erfasste Monate: <strong class="blur-val" style="color:var(--gr)">${fmtN(savings.actualSavings)}</strong></td>
         </tr>
         <tr style="background:rgba(96,165,250,0.045)">
-          <td style="padding:9px 13px;color:var(--bl);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11px">Planincome − Ist-Ausgaben</td>
+          <td style="padding:9px 13px;color:var(--bl);position:sticky;left:0;background:var(--bg3);z-index:1;font-family:var(--fb);font-weight:600;font-size:11px">Plan-Auszahlung − Ist-Ausgaben</td>
           ${yearMonths.map((m,mi)=>{const ex=recMs.includes(m)?getActualExpenseTotal(m,cats):null;const sv=ex!==null?plannedIncome-ex:null;return `<td style="text-align:right;padding:9px 5px;font-family:var(--fm);font-size:11px;font-weight:500;color:${sv===null?'var(--tx3)':sv>=0?'var(--bl)':'var(--rd)'};border-left:1px solid var(--bdr)" class="blur-val">${sv===null?'—':fmtN(sv)}</td>`}).join('')}
-          <td colspan="4" style="padding:9px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Plan-Netto: <strong class="blur-val" style="color:var(--bl)">${fmtN(plannedIncome)}/Mt</strong></td>
+          <td colspan="4" style="padding:9px 8px;text-align:right;font-family:var(--fm);font-size:10px;color:var(--tx2);border-left:2px solid var(--bdr2)">Plan-Auszahlung: <strong class="blur-val" style="color:var(--bl)">${fmtN(plannedIncome)}/Mt</strong></td>
         </tr>
       </tbody>
     </table>
